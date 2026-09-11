@@ -30,6 +30,7 @@ import java.util.Optional;
  *       can only be set once an administrator has approved the request.</li>
  * </ul>
  */
+
 public class PasswordResetService {
 
     /** State machine statuses for the password_resets.status column. */
@@ -152,8 +153,12 @@ public class PasswordResetService {
             Optional<PasswordReset> existing = resetDao.findLatestByUser(user.getId());
             if (existing.isPresent()) {
                 PasswordReset request = existing.get();
-                return RequestResult.statused(request.getUserId(), request.getStatus(),
-                        messageForStatus(request.getStatus()));
+                String status = request.getStatus();
+                if (STATUS_PENDING.equals(status) || STATUS_APPROVED.equals(status)) {
+                    // An active request is already in flight - don't create a duplicate.
+                    return RequestResult.statused(request.getUserId(), status, messageForStatus(status));
+                }
+                // COMPLETED or REJECTED: that cycle is over, a new request is allowed.
             }
             issueCode(user);
             return RequestResult.statused(user.getId(), STATUS_PENDING,

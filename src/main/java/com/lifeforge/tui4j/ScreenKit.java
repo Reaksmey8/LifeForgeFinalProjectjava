@@ -40,63 +40,159 @@ public final class ScreenKit {
     // ------------------------------------------------------------------
     // Page assembly
     // ------------------------------------------------------------------
+
+    /**
+     * Builds one complete frame row. The visible width is calculated before
+     * ANSI styling is applied, so every row has exactly the same terminal
+     * width and the left/right borders always line up.
+     */
+    private static String frameRow(String margin, int inner, String content, Style contentStyle) {
+        String safe = content == null ? "" : content;
+
+        // The outer frame must always own the final right border. Never let a
+        // long admin row replace that border with Theme.truncate()'s "...".
+        // Body rows are presentation text, so when a single row is too long,
+        // hard-fit its visible characters to the available inner width.
+        if (Theme.width(safe) > inner) {
+            safe = fitVisibleWidth(safe, inner);
+        }
+
+        int pad = Math.max(0, inner - Theme.width(safe));
+        return margin
+                + Theme.render(Theme.bar(), "│")
+                + Theme.render(contentStyle, safe)
+                + " ".repeat(pad)
+                + Theme.render(Theme.bar(), "│");
+    }
+
+    private static String fitVisibleWidth(String text, int maxWidth) {
+        if (text == null || maxWidth <= 0) {
+            return "";
+        }
+        if (Theme.width(text) <= maxWidth) {
+            return text;
+        }
+
+        // Line.text is normally plain text. If a caller supplied ANSI-styled
+        // text inside it, strip the embedded ANSI only for the overflow case;
+        // the outer frame remains intact and the line is still readable.
+        String plain = text.replaceAll("\\u001B\\[[;\\d]*[ -/]*[@-~]", "");
+        if (Theme.width(plain) <= maxWidth) {
+            return plain;
+        }
+
+        StringBuilder out = new StringBuilder();
+        int visible = 0;
+        for (int i = 0; i < plain.length() && visible < maxWidth; ) {
+            int cp = plain.codePointAt(i);
+            int w = Character.charCount(cp);
+            String ch = new String(Character.toChars(cp));
+            int cw = Theme.width(ch);
+            if (visible + cw > maxWidth) {
+                break;
+            }
+            out.append(ch);
+            visible += cw;
+            i += w;
+        }
+        return out.toString();
+    }
+
+    private static String frameDivider(String margin, int inner, char left, char right) {
+        /*
+         * Render the border characters individually. Applying a styled value
+         * to one long divider can make the style introduce a width/truncation
+         * boundary before the closing corner is emitted. Rendering each
+         * character separately guarantees exactly (inner + 2) visible columns.
+         */
+        StringBuilder out = new StringBuilder(margin);
+        out.append(Theme.render(Theme.bar(), String.valueOf(left)));
+        for (int i = 0; i < inner; i++) {
+            out.append(Theme.render(Theme.bar(), "─"));
+        }
+        out.append(Theme.render(Theme.bar(), String.valueOf(right)));
+        return out.toString();
+    }
+
     /** Assembles the shared LifeForge frame: header, content, status and help bar. */
     public static String page(String title, String subtitle, List<Line> body,
                               String status, boolean statusError,
                               List<String[]> footerKeys, int width) {
-        int inner = Math.max(40, width - 2);
-        List<Line> lines = new ArrayList<>();
+        int termWidth = Math.max(40, width);
 
-        lines.add(Line.of(Theme.bar(), "╔" + Theme.dup('═', inner) + "╗"));
-        String head = Theme.padRight(Theme.truncate("  LIFEForge  /  " + title.toUpperCase(), inner), inner);
-        lines.add(Line.of(Theme.title(), "║" + head + "║"));
-        if (subtitle != null && !subtitle.isEmpty()) {
-            lines.add(Line.of(Theme.muted(), "║" + Theme.padRight("  " + subtitle, inner) + "║"));
+        // The caller already supplies the desired page width. Build exactly
+        // one frame at that width; centering is handled by LifeForge.centerFrame().
+        // Keeping the geometry in one place prevents admin tables and footer
+        // rows from being rendered at a different width than the outer frame.
+        int frameWidth = Math.min(100, termWidth);
+        int inner = frameWidth - 2;
+        String margin = "";
+
+        List<String> renderedRows = new ArrayList<>();
+
+        // 1. Top border
+        renderedRows.add(frameDivider(margin, inner, '┌', '┐'));
+
+        // 2. Header title
+        String headText = "LIFEForge  /  " + title.toUpperCase();
+        if (Theme.width(headText) > inner) {
+            headText = Theme.truncate(headText, inner);
         }
-        lines.add(Line.of(Theme.bar(), "╠" + Theme.dup('═', inner) + "╣"));
-        lines.add(Line.blank());
+        String head = Theme.padCenter(headText, inner);
+        renderedRows.add(frameRow(margin, inner, head, Theme.title()));
 
-        lines.addAll(body);
+        // 3. Subtitle (optional)
+        if (subtitle != null && !subtitle.isEmpty()) {
+            String subText = subtitle;
+            if (Theme.width(subText) > inner) {
+                subText = Theme.truncate(subText, inner);
+            }
+            String sub = Theme.padCenter(subText, inner);
+            renderedRows.add(frameRow(margin, inner, sub, Theme.muted()));
+        }
 
+        // 4. Header divider
+        renderedRows.add(frameDivider(margin, inner, '├', '┤'));
+
+        // 5. Body lines
+        for (Line l : body) {
+            String t = l.text() == null ? "" : l.text();
+            renderedRows.add(frameRow(margin, inner, t, l.style()));
+        }
+
+        // 6. Status message (optional)
         if (status != null && !status.isEmpty()) {
-            lines.add(Line.blank());
+            renderedRows.add(frameDivider(margin, inner, '├', '┤'));
             Style st = statusError ? Theme.err() : Theme.ok();
-            List<String> stLines = Theme.wrap(status, inner - 8);
-            lines.add(Line.of(Theme.bar(), "├" + Theme.dup('─', inner) + "┤"));
-            for (String l : stLines) {
-                String prefix = statusError ? "  ERROR  " : "  OK     ";
-                lines.add(Line.of(st, "│" + Theme.padRight(prefix + l, inner) + "│"));
+            String prefix = statusError ? "  ERROR: " : "  OK: ";
+            int wrapW = Math.max(10, inner - Theme.width(prefix) - 2);
+            List<String> stLines = Theme.wrap(status, wrapW);
+            for (int i = 0; i < stLines.size(); i++) {
+                String lineText = (i == 0 ? prefix : " ".repeat(Theme.width(prefix))) + stLines.get(i);
+                renderedRows.add(frameRow(margin, inner, lineText, st));
             }
         }
 
-        lines.add(Line.blank());
-        lines.add(Line.of(Theme.bar(), "╠" + Theme.dup('═', inner) + "╣"));
+        // 7. Footer divider
+        renderedRows.add(frameDivider(margin, inner, '├', '┤'));
+
+        // 8. Footer hints
         StringBuilder hints = new StringBuilder("  ");
         for (String[] row : footerKeys) {
             if (hints.length() > 2) {
-                hints.append("   ·   ");
+                hints.append("   ");
             }
             hints.append(row[0]).append(' ').append(row[1]);
         }
-        for (String hint : Theme.wrap(hints.toString(), inner)) {
-            lines.add(Line.of(Theme.keyTag(), "║" + Theme.padRight(hint, inner) + "║"));
+        List<String> hintLines = Theme.wrap(hints.toString(), inner);
+        for (String hint : hintLines) {
+            renderedRows.add(frameRow(margin, inner, hint, Theme.keyTag()));
         }
-        lines.add(Line.of(Theme.bar(), "╚" + Theme.dup('═', inner) + "╝"));
-        return renderAll(lines, inner);
-    }
 
-    private static String renderAll(List<Line> lines, int inner) {
-        StringBuilder sb = new StringBuilder();
-        boolean first = true;
-        for (Line l : lines) {
-            if (!first) {
-                sb.append('\n');
-            }
-            String padded = Theme.padRight(l.text(), inner + 2);
-            sb.append(Theme.render(l.style(), padded));
-            first = false;
-        }
-        return sb.toString();
+        // 9. Bottom border
+        renderedRows.add(frameDivider(margin, inner, '└', '┘'));
+
+        return String.join("\n", renderedRows);
     }
 
     public static String[] keys(String[][] rows) {
@@ -154,20 +250,41 @@ public final class ScreenKit {
     // ------------------------------------------------------------------
     /**
      * A selectable list. Each item may opt into a richer right-hand tag.
-     * The selected entry gets a full-width highlight bar.
+     * The selected entry gets a prominent pointer and accent color without a background box.
      */
     public static List<Line> menu(List<String> labels, int selected, int inner) {
         List<Line> out = new ArrayList<>();
         for (int i = 0; i < labels.size(); i++) {
             String label = menuLabel(labels.get(i));
             boolean sel = i == selected;
-            String text;
-            if (sel) {
-                text = Theme.padRight("> " + label, inner - 2);
-            } else {
-                text = Theme.padRight("  " + label, inner - 2);
-            }
+            String text = (sel ? "  > " : "    ") + label;
             out.add(sel ? Line.of(Theme.selected(), text) : Line.of(Theme.text(), text));
+        }
+        return out;
+    }
+
+    /**
+     * Renders a menu whose options block is centered horizontally within the page.
+     */
+    public static List<Line> menuCenter(List<String> labels, int selected, int inner) {
+        List<Line> out = new ArrayList<>();
+        int maxLen = 0;
+        for (String l : labels) {
+            String lbl = menuLabel(l);
+            int w = Theme.width(lbl);
+            if (w > maxLen) {
+                maxLen = w;
+            }
+        }
+        int blockW = maxLen + 4; // "> " prefix + margin
+        int padLeft = Math.max(2, (inner - blockW) / 2);
+        String indent = " ".repeat(padLeft);
+
+        for (int i = 0; i < labels.size(); i++) {
+            String label = menuLabel(labels.get(i));
+            boolean isSel = (i == selected);
+            String text = indent + (isSel ? "> " : "  ") + label;
+            out.add(Line.of(isSel ? Theme.selected() : Theme.text(), text));
         }
         return out;
     }
@@ -257,74 +374,125 @@ public final class ScreenKit {
      * styling) so ANSI escapes can never break alignment.
      */
     public static List<Line> proTable(String[] headers, String[][] rows,
-                                      int selected, int inner) {
+                                      int selected, int maxWidth) {
         List<Line> out = new ArrayList<>();
         if (headers == null || headers.length == 0) {
             return out;
         }
+
         int cols = headers.length;
+        int tableWidth = Math.max(16, maxWidth);
         int[] widths = new int[cols];
+
         for (int i = 0; i < cols; i++) {
-            widths[i] = Theme.width(headers[i]);
+            widths[i] = Theme.width(headers[i] == null ? "" : headers[i]);
         }
-        for (String[] r : rows) {
-            for (int i = 0; i < cols && i < r.length; i++) {
-                widths[i] = Math.max(widths[i], Theme.width(r[i] == null ? "" : r[i]));
+        if (rows != null) {
+            for (String[] row : rows) {
+                for (int i = 0; i < cols; i++) {
+                    String value = (row != null && i < row.length && row[i] != null)
+                            ? row[i] : "";
+                    widths[i] = Math.max(widths[i], Theme.width(value));
+                }
             }
         }
 
-        // Shrink the widest trailing columns to fit the available frame.
-        int maxInner = Math.max(cols, inner - 2);
-        int total = 1; // left frame
-        for (int i = 0; i < cols; i++) {
-            total += widths[i] + (i < cols - 1 ? 3 : 2); // cell + separators + right frame
-        }
-        if (total > maxInner) {
-            int excess = total - maxInner;
-            for (int i = cols - 1; i >= 0 && excess > 0; i--) {
-                int cut = Math.min(Math.max(widths[i] - 3, 0), excess);
-                widths[i] -= cut;
-                excess -= cut;
-            }
+        // Reserve two visible columns for the selection marker inside the ID
+        // cell. The table's left border must always remain "│".
+        if (selected >= 0 && rows != null && rows.length > 0 && cols > 0) {
+            widths[0] += 2;
         }
 
-        String top = frameLine(widths, '\u250C', '\u252C', '\u2510');
-        String mid = frameLine(widths, '\u251C', '\u253C', '\u2524');
-        String bot = frameLine(widths, '\u2514', '\u2534', '\u2518');
+        // A table row has this exact visible width:
+        // left border + (space + cell + space + separator) for every column.
+        // Therefore: sum(widths) + 3 * cols + 1.
+        shrinkTableWidths(widths, tableWidth);
+
+        String top = frameLine(widths, '┌', '┬', '┐');
+        String mid = frameLine(widths, '├', '┼', '┤');
+        String bot = frameLine(widths, '└', '┴', '┘');
         out.add(Line.of(Theme.bar(), top));
 
         StringBuilder sb = new StringBuilder("│");
         for (int i = 0; i < cols; i++) {
-            sb.append(' ').append(Theme.padCenter(Theme.truncate(headers[i], widths[i]), widths[i]))
-                    .append(i < cols - 1 ? " │" : " │");
+            String h = Theme.truncate(headers[i] == null ? "" : headers[i], widths[i]);
+            sb.append(' ').append(Theme.padCenter(h, widths[i])).append(" │");
         }
         out.add(Line.of(Theme.headingPurple(), sb.toString()));
         out.add(Line.of(Theme.bar(), mid));
 
-        if (rows.length == 0) {
+        if (rows == null || rows.length == 0) {
             sb = new StringBuilder("│");
-            sb.append(Theme.padCenter("- no data -", Math.max(0, maxInner - 2))).append(" │");
+            String empty = Theme.padCenter("- no data -", Math.max(1, widths[0]));
+            sb.append(' ').append(empty).append(" │");
+            for (int c = 1; c < cols; c++) {
+                sb.append(' ').append(Theme.padRight("", widths[c])).append(" │");
+            }
             out.add(Line.of(Theme.dim(), sb.toString()));
         } else {
-            for (int i = 0; i < rows.length; i++) {
-                String[] r = rows[i];
+            for (int rIndex = 0; rIndex < rows.length; rIndex++) {
+                String[] row = rows[rIndex];
                 sb = new StringBuilder("│");
+
                 for (int c = 0; c < cols; c++) {
-                    String cell = c < r.length && r[c] != null ? r[c] : "";
+                    String cell = (row != null && c < row.length && row[c] != null)
+                            ? row[c] : "";
+
+                    if (rIndex == selected && c == 0) {
+                        cell = "> " + cell;
+                    }
+
                     cell = Theme.truncate(cell, widths[c]);
-                    sb.append(' ').append(Theme.padLeft(cell, widths[c]))
-                            .append(c < cols - 1 ? " │" : " │");
+                    sb.append(' ').append(Theme.padRight(cell, widths[c])).append(" │");
                 }
-                String rowText = sb.toString();
-                if (i == selected) {
-                    out.add(Line.of(Theme.selected(), ">" + rowText.substring(1)));
-                } else {
-                    out.add(Line.of(Theme.text(), rowText));
-                }
+
+                // The complete row is guaranteed to be tableWidth columns wide.
+                out.add(Line.of(rIndex == selected ? Theme.selected() : Theme.text(),
+                        sb.toString()));
             }
         }
+
         out.add(Line.of(Theme.bar(), bot));
         return out;
+    }
+
+    private static void shrinkTableWidths(int[] widths, int maxWidth) {
+        int total = tableVisibleWidth(widths);
+        if (total <= maxWidth) {
+            return;
+        }
+
+        int excess = total - maxWidth;
+        while (excess > 0) {
+            int best = -1;
+            int largest = 1;
+            for (int i = 0; i < widths.length; i++) {
+                // Keep at least 1 visible character per cell.
+                if (widths[i] > largest) {
+                    largest = widths[i];
+                    best = i;
+                }
+            }
+            if (best < 0) {
+                break;
+            }
+            widths[best]--;
+            excess--;
+        }
+    }
+
+    private static int tableVisibleWidth(int[] widths) {
+        int total = 1; // left border
+        for (int width : widths) {
+            total += width + 3; // leading space + cell + trailing space/separator
+        }
+        return total;
+    }
+
+    private static String cSafe(String[] row, int index) {
+        return row != null && index >= 0 && index < row.length && row[index] != null
+                ? row[index]
+                : "";
     }
 
     private static String frameLine(int[] widths, char left, char cross, char right) {

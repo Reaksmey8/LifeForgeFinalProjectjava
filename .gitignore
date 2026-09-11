@@ -41,3 +41,9 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+.gradle/
+.gradle-user-home/
+.gradle-user-home-jdk21/
+build/
+.idea/
+*.iml

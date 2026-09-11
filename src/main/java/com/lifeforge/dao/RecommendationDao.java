@@ -102,6 +102,21 @@ public class RecommendationDao {
             Long categoryId,
             ActivityLevel activityLevel
     ) throws SQLException {
+        // 1. Direct match on the specified category
+        Optional<Recommendation> direct = findDirectMatch(goalId, categoryId, activityLevel);
+        if (direct.isPresent()) {
+            return direct;
+        }
+
+        // 2. Child category fallback ONLY if no direct recommendation exists
+        return findChildCategoryMatch(goalId, categoryId, activityLevel);
+    }
+
+    public Optional<Recommendation> findDirectMatch(
+            Long goalId,
+            Long categoryId,
+            ActivityLevel activityLevel
+    ) throws SQLException {
 
         String sql = """
                 SELECT *
@@ -139,7 +154,6 @@ public class RecommendationDao {
             ps.setString(4, activity);
 
             try (ResultSet rs = ps.executeQuery()) {
-
                 if (rs.next()) {
                     return Optional.of(mapRow(rs));
                 }
@@ -147,6 +161,84 @@ public class RecommendationDao {
         }
 
         return Optional.empty();
+    }
+
+    public Optional<Recommendation> findChildCategoryMatch(
+            Long goalId,
+            Long parentCategoryId,
+            ActivityLevel activityLevel
+    ) throws SQLException {
+
+        String sql = """
+                SELECT *
+                FROM recommendations
+                WHERE goal_id = ?
+                  AND category_id IN (
+                      SELECT id FROM recommendation_categories WHERE parent_category_id = ?
+                  )
+                  AND (
+                        activity_level = ?
+                        OR activity_level = 'ALL'
+                        OR activity_level IS NULL
+                  )
+                ORDER BY
+                    CASE
+                        WHEN activity_level = ? THEN 1
+                        WHEN activity_level = 'ALL' THEN 2
+                        WHEN activity_level IS NULL THEN 3
+                        ELSE 4
+                    END,
+                    id
+                LIMIT 1
+                """;
+
+        try (Connection conn = DatabaseConfig.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+
+            ps.setLong(1, goalId);
+            ps.setLong(2, parentCategoryId);
+
+            String activity =
+                    activityLevel != null
+                            ? activityLevel.name()
+                            : "ALL";
+
+            ps.setString(3, activity);
+            ps.setString(4, activity);
+
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(mapRow(rs));
+                }
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    public boolean hasRecommendationsForGoal(Long goalId) throws SQLException {
+        if (goalId == null) return false;
+        String sql = "SELECT 1 FROM recommendations WHERE goal_id = ? LIMIT 1";
+        try (Connection conn = DatabaseConfig.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, goalId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    public boolean hasActivitySpecificRecommendation(Long goalId, ActivityLevel activityLevel) throws SQLException {
+        if (goalId == null || activityLevel == null) return false;
+        String sql = "SELECT 1 FROM recommendations WHERE goal_id = ? AND activity_level = ? LIMIT 1";
+        try (Connection conn = DatabaseConfig.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, goalId);
+            ps.setString(2, activityLevel.name());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
     }
 
 

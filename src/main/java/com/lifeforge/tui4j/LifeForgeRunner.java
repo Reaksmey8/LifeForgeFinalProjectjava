@@ -6,6 +6,7 @@ import com.williamcallahan.tui4j.compat.bubbletea.Message;
 import com.williamcallahan.tui4j.compat.bubbletea.Model;
 import com.williamcallahan.tui4j.compat.bubbletea.UpdateResult;
 import com.williamcallahan.tui4j.compat.bubbletea.input.key.Key;
+import com.williamcallahan.tui4j.compat.bubbletea.input.key.KeyType;
 import com.williamcallahan.tui4j.compat.bubbletea.message.KeyPressMessage;
 import com.williamcallahan.tui4j.compat.bubbletea.QuitMessage;
 import com.williamcallahan.tui4j.compat.bubbletea.message.WindowSizeMessage;
@@ -52,8 +53,10 @@ public final class LifeForgeRunner {
 
             enterAltScreen(out);
 
-            // Give the model the real console width so layout is correct.
-            model.update(new WindowSizeMessage(input.columns(), 24));
+            // Give the model the real console width and height so layout is centered.
+            int lastCols = input.columns();
+            int lastRows = input.rows();
+            model.update(new WindowSizeMessage(lastCols, lastRows));
 
             String last = model.view();
             paint(last, out);
@@ -63,12 +66,21 @@ public final class LifeForgeRunner {
                 if (key == null) {
                     break;
                 }
-                UpdateResult<? extends Model> result = model.update(new KeyPressMessage(key));
-                if (result == null) {
-                    break;
+                int curCols = input.columns();
+                int curRows = input.rows();
+                if (curCols != lastCols || curRows != lastRows) {
+                    lastCols = curCols;
+                    lastRows = curRows;
+                    model.update(new WindowSizeMessage(curCols, curRows));
                 }
-                if (wantsQuit(result.command())) {
-                    break;
+                if (key.type() != KeyType.KeyRunes || key.runes().length > 0) {
+                    UpdateResult<? extends Model> result = model.update(new KeyPressMessage(key));
+                    if (result == null) {
+                        break;
+                    }
+                    if (wantsQuit(result.command())) {
+                        break;
+                    }
                 }
                 String view = model.view();
                 if (!view.equals(last)) {

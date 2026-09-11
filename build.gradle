@@ -1,20 +1,103 @@
 plugins {
     id 'java'
+    id 'application'
 }
 
-group = 'org.example'
-version = '1.0-SNAPSHOT'
+group = 'com.lifeforge'
+version = '1.0.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
 
 repositories {
     mavenCentral()
 }
 
 dependencies {
-    testImplementation platform('org.junit:junit-bom:6.0.0')
+    implementation 'org.postgresql:postgresql:42.7.4'
+    // TUI4J (Terminal UI for Java) with Bubble Tea compatibility - published on Maven Central
+    // Group ID: com.williamcallahan (GitHub: WilliamAGH/tui4j)
+    implementation 'com.williamcallahan:tui4j:0.3.3'
+    // JLine 3.27.0 for Windows CMD/Terminal ANSI rendering (FFM/JNI/JNA/Jansi providers)
+    implementation 'org.jline:jline-terminal:3.27.0'
+    implementation 'org.jline:jline-terminal-jna:3.27.0'
+    implementation 'org.jline:jline-terminal-jni:3.27.0'
+    implementation 'org.jline:jline-terminal-jansi:3.27.0'
+    implementation 'org.jline:jline-terminal-ffm:3.27.0'
+    implementation 'org.jline:jline-native:3.27.0'
+    implementation 'org.jline:jline-console:3.27.0'
+    // JNA platform exposes the Windows console API (SetConsoleOutputCP etc.)
+    implementation 'net.java.dev.jna:jna-platform:5.15.0'
+    implementation 'org.mindrot:jbcrypt:0.4'
+    implementation 'net.sf.jasperreports:jasperreports:6.21.3'
+
+    testImplementation platform('org.junit:junit-bom:5.10.2')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+application {
+    mainClass = 'com.lifeforge.Main'
+
+    // Force UTF-8 end-to-end so box-drawing characters and all input/output render
+    // correctly on Windows CMD / Terminal. Without these flags, the default OEM code page
+    // (CP437/CP850/CP1252) mangles UTF-8 glyphs into mojibake.
+    applicationDefaultJvmArgs = [
+            '-Dfile.encoding=UTF-8',
+            '-Dnative.encoding=UTF-8',
+            '-Dstdout.encoding=UTF-8',
+            '-Dstderr.encoding=UTF-8',
+            '-Dsun.stdout.encoding=UTF-8',
+            '-Dsun.stderr.encoding=UTF-8',
+            // Enable native access for JNI/JNA/FFM (required for JLine terminal providers on JDK 17+)
+            '--enable-native-access=ALL-UNNAMED',
+            // On Windows: use JNA, Jansi, FFM, and console providers (available in classpath)
+            // On Unix: use FFM, JNI, JNA, Jansi
+            '-Dorg.jline.terminal.providers=ffm,jna,jansi,console',
+            '-Dorg.jline.terminal.encoding=UTF-8',
+            // Disable Swing/GUI popups - pure console ANSI rendering only
+            '-Djava.awt.headless=true',
+    ]
+}
+
 test {
     useJUnitPlatform()
+    failOnNoDiscoveredTests = false
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.withType(JavaExec).configureEach {
+    jvmArgs '-Dfile.encoding=UTF-8'
+}
+
+run {
+    // Feed the JVM from the real terminal via stdin. The app first tries to read the
+    // attached Windows console directly (CONIN$/ReadConsoleInputW) for reliable
+    // arrow-key input; if no console is available (e.g. a non-interactive launch) it
+    // gracefully falls back to reading this standard input instead of exiting.
+    standardInput = System.in
+    // Inherit JVM args from application extension
+    jvmArgs = application.applicationDefaultJvmArgs
+}
+
+// បន្ថែម Task នេះនៅខាងក្រោមគេបង្អស់ក្នុង build.gradle
+jar {
+    manifest {
+        attributes(
+                'Main-Class': application.mainClass.get()
+        )
+    }
+    // បូកបញ្ចូល Dependencies (PostgreSQL, TUI4J, JLine...) ចូលក្នុង .jar តែមួយ
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
 }

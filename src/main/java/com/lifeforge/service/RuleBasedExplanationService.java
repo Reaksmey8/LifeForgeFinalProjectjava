@@ -21,9 +21,15 @@ public class RuleBasedExplanationService implements RecommendationExplanationSer
         sb.append("LifeForge recommends: ").append(recommendation.getTitle()).append(". ");
 
         if (recommendation.getSuggestedTarget() != null && !recommendation.getSuggestedTarget().isBlank()) {
-            sb.append("The suggested target of ").append(recommendation.getSuggestedTarget())
-                    .append(" is calibrated to your profile (age ").append(user.getAge())
-                    .append(", weight ").append(formatWeight(user.getWeightKg())).append("). ");
+            String target = recommendation.getSuggestedTarget();
+            if (target.toLowerCase().contains("protein") || (recommendation.getTitle() != null && recommendation.getTitle().toLowerCase().contains("protein"))) {
+                sb.append("The suggested guidance to include a protein-rich food source with each meal is calibrated to your profile (age ")
+                        .append(user.getAge()).append(", weight ").append(formatWeight(user.getWeightKg())).append("). ");
+            } else {
+                sb.append("The suggested target of ").append(target)
+                        .append(" is calibrated to your profile (age ").append(user.getAge())
+                        .append(", weight ").append(formatWeight(user.getWeightKg())).append("). ");
+            }
         }
 
         sb.append("This recommendation is intended as a general guideline, not a rigid daily requirement.");

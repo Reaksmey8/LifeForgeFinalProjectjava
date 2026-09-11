@@ -51,9 +51,13 @@ public class PasswordResetDao {
         return Optional.empty();
     }
 
-    /** Deletes every outstanding code for a user so a fresh code supersedes all old ones. */
+    /**
+     * Invalidates any still-pending code for a user so a fresh code
+     * supersedes it. Scoped to PENDING only - COMPLETED/REJECTED/APPROVED
+     * rows are historical records and must never be deleted here.
+     */
     public void invalidateForUser(Long userId) throws SQLException {
-        String sql = "DELETE FROM password_resets WHERE user_id = ?";
+        String sql = "DELETE FROM password_resets WHERE user_id = ? AND status = 'PENDING'";
         try (Connection conn = DatabaseConfig.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setLong(1, userId);

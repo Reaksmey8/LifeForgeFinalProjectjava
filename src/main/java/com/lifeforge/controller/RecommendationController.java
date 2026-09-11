@@ -1,10 +1,7 @@
 package com.lifeforge.controller;
 
 import com.lifeforge.Session;
-import com.lifeforge.model.Goal;
-import com.lifeforge.model.Recommendation;
-import com.lifeforge.model.RecommendationCategory;
-import com.lifeforge.model.User;
+import com.lifeforge.model.*;
 import com.lifeforge.service.ExplanationOutcome;
 import com.lifeforge.service.AiChatResponse;
 import com.lifeforge.service.GoalService;
@@ -62,6 +59,51 @@ public class RecommendationController extends BaseController {
         }
     }
 
+    public Optional<PersonalizedAnalysisResult> getPersonalizedAnalysis() {
+        Optional<Goal> goalOpt = currentGoal();
+        if (goalOpt.isEmpty()) {
+            setError("Select a goal before viewing personalized analysis.");
+            return Optional.empty();
+        }
+        User user = session.getCurrentUser();
+        return Optional.of(recommendationService.getPersonalizedAnalysis(user, goalOpt.get()));
+    }
+
+    public Optional<PersonalizedPlanResult> getPersonalizedPlan() {
+        Optional<Goal> goalOpt = currentGoal();
+        if (goalOpt.isEmpty()) {
+            setError("Select a goal before viewing your personalized plan.");
+            return Optional.empty();
+        }
+        User user = session.getCurrentUser();
+        try {
+            return Optional.of(recommendationService.getPersonalizedPlan(user, goalOpt.get()));
+        } catch (SQLException e) {
+            setError(e, "Failed to load your personalized plan.");
+            return Optional.empty();
+        }
+    }
+
+    public Optional<CalculationTrace> getCalculationTrace() {
+        Optional<Goal> goalOpt = currentGoal();
+        if (goalOpt.isEmpty()) {
+            setError("Select a goal before viewing calculation trace.");
+            return Optional.empty();
+        }
+        User user = session.getCurrentUser();
+        return Optional.of(recommendationService.getCalculationTrace(user, goalOpt.get()));
+    }
+
+    public Optional<DailyBlueprint> getDailyBlueprint() {
+        Optional<Goal> goalOpt = currentGoal();
+        if (goalOpt.isEmpty()) {
+            setError("Select a goal before viewing the daily blueprint.");
+            return Optional.empty();
+        }
+        User user = session.getCurrentUser();
+        return Optional.of(recommendationService.getDailyBlueprint(user, goalOpt.get()));
+    }
+
     /**
      * Computes the "Why This Recommendation?" explanation for an
      * already-generated recommendation, on demand. Tries AI first
@@ -105,6 +147,24 @@ public class RecommendationController extends BaseController {
         }
         return Optional.of(recommendationService.chatWithAi(
                 user, goalOpt.get(), category, recommendation, recentConversation, question));
+    }
+
+    /** Sends an AI question to the Global Assistant using the active user's plan. */
+    public Optional<AiChatResponse> chatWithGlobalAssistant(List<String> recentConversation,
+                                                            String question) {
+        Optional<Goal> goalOpt = currentGoal();
+        User user = session.getCurrentUser();
+        if (user == null) {
+            setError("Not logged in.");
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(recommendationService.chatWithGlobalAssistant(
+                    user, goalOpt.orElse(null), recentConversation, question));
+        } catch (SQLException e) {
+            setError(e, "Failed to load plan for AI assistance.");
+            return Optional.empty();
+        }
     }
 
     public List<RecommendationCategory> getTopCategories() {

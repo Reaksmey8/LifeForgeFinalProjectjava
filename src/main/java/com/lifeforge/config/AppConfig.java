@@ -95,7 +95,7 @@ public final class AppConfig {
      * Ollama installed.
      */
     public static boolean isAiEnabled() {
-        String flag = System.getenv("LIFEFORGE_AI_ENABLED");
+        String flag = envOrProperty("LIFEFORGE_AI_ENABLED", "lifeforge.ai.enabled");
         return flag == null || flag.isBlank() || Boolean.parseBoolean(flag);
     }
 

@@ -20,17 +20,17 @@ public final class Theme {
     public static final TerminalColor BG        = hex("#0a0e13");
     public static final TerminalColor PANEL     = hex("#10161d");
     public static final TerminalColor PANEL2    = hex("#151d26");
-    public static final TerminalColor BORDER    = hex("#2a3744");
-    public static final TerminalColor CYAN      = hex("#22d3ee");
-    public static final TerminalColor GREEN     = hex("#34d399");
-    public static final TerminalColor PURPLE    = hex("#a78bfa");
-    public static final TerminalColor YELLOW    = hex("#fbbf24");
-    public static final TerminalColor RED       = hex("#f87171");
-    public static final TerminalColor TEXT      = hex("#b9c6d3");
-    public static final TerminalColor DIM       = hex("#5d7084");
-    public static final TerminalColor HEADER    = hex("#8fe9ff");
-    public static final TerminalColor SELECT_BG = hex("#0f4d63");
-    public static final TerminalColor SELECT_FG = hex("#c0f6ff");
+    public static final TerminalColor BORDER    = hex("#9c5cdc");
+    public static final TerminalColor CYAN      = hex("#0284c7");
+    public static final TerminalColor GREEN     = hex("#059669");
+    public static final TerminalColor PURPLE    = hex("#7c3aed");
+    public static final TerminalColor YELLOW    = hex("#d97706");
+    public static final TerminalColor RED       = hex("#dc2626");
+    public static final TerminalColor TEXT      = hex("#1e293b");
+    public static final TerminalColor DIM       = hex("#64748b");
+    public static final TerminalColor HEADER    = hex("#0284c7");
+    public static final TerminalColor SELECT_BG = hex("#0284c7");
+    public static final TerminalColor SELECT_FG = hex("#0284c7");
 
     public static TerminalColor hex(String rgb) {
         return new RGBColor(rgb);
@@ -39,24 +39,25 @@ public final class Theme {
     // ------------------------------------------------------------------
     // Named styles
     // ------------------------------------------------------------------
-    public static Style plain()      { return Style.newStyle().foreground(TEXT); }
-    public static Style dim()        { return Style.newStyle().foreground(DIM); }
-    public static Style muted()      { return Style.newStyle().foreground(DIM); }
-    public static Style text()       { return Style.newStyle().foreground(TEXT); }
-    public static Style title()      { return Style.newStyle().foreground(HEADER).bold(true); }
+    public static Style plain()         { return Style.newStyle(); }
+    public static Style dim()           { return Style.newStyle().foreground(DIM); }
+    public static Style muted()         { return Style.newStyle().foreground(DIM); }
+    public static Style text()          { return Style.newStyle(); }
+    public static Style title()         { return Style.newStyle().foreground(HEADER).bold(true); }
     public static Style headingCyan()   { return Style.newStyle().foreground(CYAN).bold(true); }
     public static Style headingGreen()  { return Style.newStyle().foreground(GREEN).bold(true); }
+    public static Style headingYellow() { return Style.newStyle().foreground(YELLOW).bold(true); }
     public static Style headingPurple() { return Style.newStyle().foreground(PURPLE).bold(true); }
-    public static Style ok()         { return Style.newStyle().foreground(GREEN); }
-    public static Style warn()       { return Style.newStyle().foreground(YELLOW); }
-    public static Style err()        { return Style.newStyle().foreground(RED).bold(true); }
-    public static Style pivot()      { return Style.newStyle().foreground(CYAN); }
-    public static Style keyTag()     { return Style.newStyle().foreground(PURPLE).bold(true); }
-    public static Style selected()   { return Style.newStyle().background(SELECT_BG).foreground(SELECT_FG).bold(true); }
-    public static Style bar()        { return Style.newStyle().foreground(BORDER); }
-    public static Style accentOn()   { return Style.newStyle().background(CYAN).foreground(BG).bold(true); }
-    public static Style accentGreen() { return Style.newStyle().background(GREEN).foreground(BG).bold(true); }
-    public static Style accentPurple() { return Style.newStyle().background(PURPLE).foreground(BG).bold(true); }
+    public static Style ok()            { return Style.newStyle().foreground(GREEN).bold(true); }
+    public static Style warn()          { return Style.newStyle().foreground(YELLOW).bold(true); }
+    public static Style err()           { return Style.newStyle().foreground(RED).bold(true); }
+    public static Style pivot()         { return Style.newStyle().foreground(CYAN).bold(true); }
+    public static Style keyTag()        { return Style.newStyle().foreground(PURPLE).bold(true); }
+    public static Style selected()      { return Style.newStyle().foreground(CYAN).bold(true); }
+    public static Style bar()           { return Style.newStyle().foreground(BORDER); }
+    public static Style accentOn()      { return Style.newStyle().foreground(CYAN).bold(true); }
+    public static Style accentGreen()   { return Style.newStyle().foreground(GREEN).bold(true); }
+    public static Style accentPurple()  { return Style.newStyle().foreground(PURPLE).bold(true); }
 
     // ------------------------------------------------------------------
     // Plain-string helpers (input must not contain ANSI escapes)
@@ -185,10 +186,48 @@ public final class Theme {
         return index + 1;
     }
 
-    private static int displayWidth(int cp) {
-        // Covers CJK wide characters and the emoji blocks used by the navigation
-        // labels. This keeps padded menu rows stable in common Windows terminals.
-        return cp >= 0x1100 ? 2 : 1;
+    public static int displayWidth(int cp) {
+
+        // --------------------------------------------------------------
+        // Box-drawing characters are ONE terminal column wide.
+        // This is critical for the LifeForge borders:
+        //
+        // ┌ ─ ┐
+        // │
+        // ├ ─ ┤
+        // └ ─ ┘
+        // --------------------------------------------------------------
+        if (cp >= 0x2500 && cp <= 0x257F) {
+            return 1;
+        }
+
+        // Block elements are normally one terminal column wide.
+        if (cp >= 0x2580 && cp <= 0x259F) {
+            return 1;
+        }
+
+        // --------------------------------------------------------------
+        // CJK characters are generally two terminal columns wide.
+        // --------------------------------------------------------------
+        if ((cp >= 0x1100 && cp <= 0x11FF) ||      // Hangul Jamo
+                (cp >= 0x2E80 && cp <= 0x9FFF) ||      // CJK / radicals
+                (cp >= 0xAC00 && cp <= 0xD7AF) ||      // Hangul syllables
+                (cp >= 0xF900 && cp <= 0xFAFF) ||      // CJK compatibility
+                (cp >= 0xFF01 && cp <= 0xFF60)) {      // Full-width forms
+            return 2;
+        }
+
+        // --------------------------------------------------------------
+        // Emoji / supplementary symbols used by LifeForge.
+        // --------------------------------------------------------------
+        if ((cp >= 0x1F000 && cp <= 0x1FAFF) ||
+                cp == 0x274C || cp == 0x2705 || cp == 0x2B50 || cp == 0x2600 ||
+                cp == 0x2699 || cp == 0x26A0 || cp == 0x270F || cp == 0x2795) {
+            return 2;
+        }
+
+        // Everything else is one terminal column.
+        return 1;
     }
 
 

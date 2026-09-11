@@ -3,6 +3,7 @@ package com.lifeforge.tui4j.terminal;
 import com.sun.jna.Library;
 import com.sun.jna.Native;
 import com.sun.jna.ptr.IntByReference;
+import com.sun.jna.platform.win32.Kernel32;
 import com.sun.jna.platform.win32.WinBase;
 import com.sun.jna.platform.win32.Wincon;
 import com.sun.jna.platform.win32.WinNT;
@@ -42,6 +43,8 @@ public final class TerminalInput {
         Key nextKey();
 
         int columns();
+
+        int rows();
 
         void close();
 
@@ -92,6 +95,11 @@ public final class TerminalInput {
     /** Console width in columns (for correct screen layout). */
     public int columns() {
         return backend.columns();
+    }
+
+    /** Console height in rows (for vertical screen centering). */
+    public int rows() {
+        return backend.rows();
     }
 
     /** Restores the console and releases resources. */
@@ -145,36 +153,6 @@ public final class TerminalInput {
         private static final int LEFT_CTRL_PRESSED = 0x0008;
         private static final int RIGHT_CTRL_PRESSED = 0x0004;
 
-        /** kernel32 functions JNA's default Kernel32 interface omits. */
-        private interface K32 extends Library {
-            K32 I = Native.load("kernel32", K32.class);
-
-            WinNT.HANDLE GetStdHandle(int nStdHandle);
-
-            WinNT.HANDLE CreateFileW(String name, int access, int share,
-                                     WinBase.SECURITY_ATTRIBUTES attr, int create,
-                                     int flags, WinNT.HANDLE tmpl);
-
-            boolean GetConsoleMode(WinNT.HANDLE h, IntByReference mode);
-
-            boolean AttachConsole(int dwProcessId);
-
-            boolean FreeConsole();
-
-            boolean SetConsoleMode(WinNT.HANDLE h, int mode);
-
-            boolean ReadConsoleInputW(WinNT.HANDLE h, Wincon.INPUT_RECORD[] buf,
-                                      int len, IntByReference read);
-
-            boolean GetConsoleScreenBufferInfo(WinNT.HANDLE h,
-                                               Wincon.CONSOLE_SCREEN_BUFFER_INFO info);
-
-            boolean CloseHandle(WinNT.HANDLE h);
-        }
-
-        // Standard input handle id, valid when the process is attached to a console.
-        private static final int STD_INPUT_HANDLE = -10;
-
         // AttachConsole flag: attach to the console that started the process, so a
         // JVM launched by a parent (e.g. `gradlew run`) can reach the real console.
         private static final int ATTACH_PARENT_PROCESS = 0xFFFFFFFF;
@@ -200,7 +178,7 @@ public final class TerminalInput {
 
         static Backend open() {
             try {
-                K32 k32 = K32.I;
+                Kernel32 k32 = Kernel32.INSTANCE;
                 WinNT.HANDLE hIn = null;
                 boolean closeIn = false;
                 WinNT.HANDLE hOut = null;
@@ -208,47 +186,88 @@ public final class TerminalInput {
                 try {
                     // Prefer the process's standard input handle when it really is the
                     // console (works under plain `java` and interactive `gradlew run`).
-                    WinNT.HANDLE stdIn = k32.GetStdHandle(STD_INPUT_HANDLE);
+                    WinNT.HANDLE stdIn = k32.GetStdHandle(Wincon.STD_INPUT_HANDLE);
                     IntByReference mode = new IntByReference();
                     boolean isConsole =
-                            stdIn != null && k32.GetConsoleMode(stdIn, mode);
+                            stdIn != null && !WinBase.INVALID_HANDLE_VALUE.equals(stdIn) && k32.GetConsoleMode(stdIn, mode);
                     if (!isConsole) {
-                        // stdin is a pipe (e.g. launched via `gradlew run`), so the JVM
+                        // stdin is a pipe (e.g. launched via `gradlew run` or IDE runner), so the JVM
                         // process isn't attached to the parent console and `CONIN$` does
-                        // not exist yet. Attach to the parent's console, then re-acquire
-                        // the standard input handle which now points at the console.
+                        // not exist yet. Attach to the parent's console, or walk ancestors
+                        // up to the shell/terminal process.
                         k32.FreeConsole();
                         attached = k32.AttachConsole(ATTACH_PARENT_PROCESS);
-                        stdIn = k32.GetStdHandle(STD_INPUT_HANDLE);
-                        isConsole = stdIn != null && k32.GetConsoleMode(stdIn, mode);
+                        if (!attached) {
+                            try {
+                                ProcessHandle ph = ProcessHandle.current();
+                                while (ph.parent().isPresent()) {
+                                    ph = ph.parent().get();
+                                    k32.FreeConsole();
+                                    if (k32.AttachConsole((int) ph.pid())) {
+                                        attached = true;
+                                        break;
+                                    }
+                                }
+                            } catch (Throwable ignored) {
+                            }
+                        }
                     }
-                    if (isConsole) {
+                    if (isConsole && !attached) {
                         hIn = stdIn;
                         closeIn = false;
-                    } else {
-                        // Fall back to opening the attached console by name.
-                        hIn = k32.CreateFileW("CONIN$", GENERIC_READ | GENERIC_WRITE,
+                    } else if (attached) {
+                        // When attached, open CONIN$ directly for raw keyboard input.
+                        hIn = k32.CreateFile("CONIN$", GENERIC_READ | GENERIC_WRITE,
                                 FILE_SHARE_READ | FILE_SHARE_WRITE, null, OPEN_EXISTING, 0, null);
-                        if (hIn == null) {
-                            return null;
+                        if (hIn == null || WinBase.INVALID_HANDLE_VALUE.equals(hIn)) {
+                            stdIn = k32.GetStdHandle(Wincon.STD_INPUT_HANDLE);
+                            if (stdIn != null && !WinBase.INVALID_HANDLE_VALUE.equals(stdIn) && k32.GetConsoleMode(stdIn, mode)) {
+                                hIn = stdIn;
+                                closeIn = false;
+                            } else {
+                                if (attached) {
+                                    k32.FreeConsole();
+                                }
+                                return null;
+                            }
+                        } else {
+                            closeIn = true;
                         }
-                        closeIn = true;
                         if (!k32.GetConsoleMode(hIn, mode)) {
+                            closeQuietly(hIn, closeIn, null);
+                            if (attached) {
+                                k32.FreeConsole();
+                            }
                             return null;
                         }
+                    } else {
+                        return null;
                     }
                     int original = mode.getValue();
                     int raw = (original & ~(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT
                             | ENABLE_ECHO_INPUT | ENABLE_MOUSE_INPUT))
                             | ENABLE_EXTENDED_FLAGS;
                     if (!k32.SetConsoleMode(hIn, raw)) {
+                        closeQuietly(hIn, closeIn, null);
+                        if (attached) {
+                            k32.FreeConsole();
+                        }
                         return null;
                     }
-                    hOut = k32.CreateFileW("CONOUT$", GENERIC_READ | GENERIC_WRITE,
+                    hOut = k32.CreateFile("CONOUT$", GENERIC_READ | GENERIC_WRITE,
                             FILE_SHARE_READ | FILE_SHARE_WRITE, null, OPEN_EXISTING, 0, null);
+                    if (hOut == null || WinBase.INVALID_HANDLE_VALUE.equals(hOut)) {
+                        hOut = k32.GetStdHandle(Wincon.STD_OUTPUT_HANDLE);
+                    }
                     return new WindowsBackend(hIn, closeIn, hOut, original, attached);
                 } catch (Throwable t) {
                     closeQuietly(hIn, closeIn, hOut);
+                    if (attached) {
+                        try {
+                            Kernel32.INSTANCE.FreeConsole();
+                        } catch (Throwable ignored) {
+                        }
+                    }
                     return null;
                 }
             } catch (Throwable t) {
@@ -258,15 +277,16 @@ public final class TerminalInput {
 
         private static void closeQuietly(WinNT.HANDLE hIn, boolean closeIn,
                                          WinNT.HANDLE hOut) {
+            Kernel32 k32 = Kernel32.INSTANCE;
             try {
-                if (hIn != null && closeIn) {
-                    K32.I.CloseHandle(hIn);
+                if (hIn != null && closeIn && !WinBase.INVALID_HANDLE_VALUE.equals(hIn)) {
+                    k32.CloseHandle(hIn);
                 }
             } catch (Throwable ignored) {
             }
             try {
-                if (hOut != null) {
-                    K32.I.CloseHandle(hOut);
+                if (hOut != null && !WinBase.INVALID_HANDLE_VALUE.equals(hOut)) {
+                    k32.CloseHandle(hOut);
                 }
             } catch (Throwable ignored) {
             }
@@ -274,7 +294,7 @@ public final class TerminalInput {
 
         @Override
         public Key nextKey() {
-            K32 k32 = K32.I;
+            Kernel32 k32 = Kernel32.INSTANCE;
             // Consecutive, unrecoverable-looking failures (bad handle, etc.) are the
             // only reason to give up. A single transient hiccup while decoding one
             // INPUT_RECORD (e.g. an unexpected/partial native structure) must NOT end
@@ -285,8 +305,8 @@ public final class TerminalInput {
             int consecutiveFailures = 0;
             while (true) {
                 try {
-                    if (!k32.ReadConsoleInputW(hIn, buffer, 1, numRead)) {
-                        // ReadConsoleInputW itself failing (not just a decode hiccup)
+                    if (!k32.ReadConsoleInput(hIn, buffer, 1, numRead)) {
+                        // ReadConsoleInput itself failing (not just a decode hiccup)
                         // means the handle is no longer usable -- that is fatal.
                         return null;
                     }
@@ -295,6 +315,9 @@ public final class TerminalInput {
                         continue;
                     }
                     buffer[0].read();
+                    if (buffer[0].EventType == 0x0004) {
+                        return new Key(KeyType.KeyRunes, new char[0]);
+                    }
                     if (buffer[0].EventType != Wincon.INPUT_RECORD.KEY_EVENT) {
                         continue;
                     }
@@ -368,11 +391,13 @@ public final class TerminalInput {
         @Override
         public int columns() {
             try {
-                Wincon.CONSOLE_SCREEN_BUFFER_INFO info = new Wincon.CONSOLE_SCREEN_BUFFER_INFO();
-                if (K32.I.GetConsoleScreenBufferInfo(hOut, info)) {
-                    int w = info.srWindow.Right - info.srWindow.Left + 1;
-                    if (w >= 40) {
-                        return w;
+                if (hOut != null && !WinBase.INVALID_HANDLE_VALUE.equals(hOut)) {
+                    Wincon.CONSOLE_SCREEN_BUFFER_INFO info = new Wincon.CONSOLE_SCREEN_BUFFER_INFO();
+                    if (Kernel32.INSTANCE.GetConsoleScreenBufferInfo(hOut, info)) {
+                        int w = info.srWindow.Right - info.srWindow.Left + 1;
+                        if (w >= 40) {
+                            return w;
+                        }
                     }
                 }
             } catch (Throwable ignored) {
@@ -381,16 +406,35 @@ public final class TerminalInput {
         }
 
         @Override
+        public int rows() {
+            try {
+                if (hOut != null && !WinBase.INVALID_HANDLE_VALUE.equals(hOut)) {
+                    Wincon.CONSOLE_SCREEN_BUFFER_INFO info = new Wincon.CONSOLE_SCREEN_BUFFER_INFO();
+                    if (Kernel32.INSTANCE.GetConsoleScreenBufferInfo(hOut, info)) {
+                        int h = info.srWindow.Bottom - info.srWindow.Top + 1;
+                        if (h >= 10) {
+                            return h;
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+            return 24;
+        }
+
+        @Override
         public void close() {
             try {
-                K32.I.SetConsoleMode(hIn, originalMode);
+                if (hIn != null && !WinBase.INVALID_HANDLE_VALUE.equals(hIn)) {
+                    Kernel32.INSTANCE.SetConsoleMode(hIn, originalMode);
+                }
             } catch (Throwable ignored) {
             }
             closeQuietly(hIn, closeIn, hOut);
             if (attached) {
                 // Detach the console we attached to in open() so we don't leave the
                 // process owning one after the app exits.
-                K32.I.FreeConsole();
+                Kernel32.INSTANCE.FreeConsole();
             }
         }
 
@@ -447,6 +491,21 @@ public final class TerminalInput {
         }
 
         @Override
+        public int rows() {
+            String lines = System.getenv("LINES");
+            if (lines != null) {
+                try {
+                    int h = Integer.parseInt(lines.trim());
+                    if (h >= 10) {
+                        return h;
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            return 24;
+        }
+
+        @Override
         public void close() {
             try {
                 tty.close();
@@ -483,6 +542,77 @@ public final class TerminalInput {
     // ------------------------------------------------------------------
     private static final class SystemInBackend implements Backend {
         private final VtKeyReader reader = new VtKeyReader(System.in);
+        private int lastCols = 80;
+        private int lastRows = 24;
+        private long lastQueryTime = 0;
+
+        private void refreshDimensions() {
+            long now = System.currentTimeMillis();
+            if (now - lastQueryTime < 500) {
+                return;
+            }
+            lastQueryTime = now;
+
+            // 1. Environment variables
+            String colsEnv = System.getenv("COLUMNS");
+            String linesEnv = System.getenv("LINES");
+            if (colsEnv != null && linesEnv != null) {
+                try {
+                    int c = Integer.parseInt(colsEnv.trim());
+                    int r = Integer.parseInt(linesEnv.trim());
+                    if (c >= 40 && r >= 10) {
+                        lastCols = c;
+                        lastRows = r;
+                        return;
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+
+            // 2. Query Windows console buffer if running on Windows
+            boolean windows = System.getProperty("os.name", "")
+                    .toLowerCase(Locale.ROOT).contains("win");
+            if (windows) {
+                try {
+                    Kernel32 k32 = Kernel32.INSTANCE;
+                    ProcessHandle ph = ProcessHandle.current();
+                    while (ph.parent().isPresent()) {
+                        ph = ph.parent().get();
+                        int pid = (int) ph.pid();
+                        k32.FreeConsole();
+                        if (k32.AttachConsole(pid)) {
+                            WinNT.HANDLE hConOut = k32.CreateFile(
+                                    "CONOUT$",
+                                    0x80000000 | 0x40000000,
+                                    1 | 2,
+                                    null,
+                                    3,
+                                    0,
+                                    null
+                            );
+                            if (hConOut != null && !WinBase.INVALID_HANDLE_VALUE.equals(hConOut)) {
+                                Wincon.CONSOLE_SCREEN_BUFFER_INFO csbi =
+                                        new Wincon.CONSOLE_SCREEN_BUFFER_INFO();
+                                if (k32.GetConsoleScreenBufferInfo(hConOut, csbi)) {
+                                    int w = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+                                    int h = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+                                    k32.CloseHandle(hConOut);
+                                    k32.FreeConsole();
+                                    if (w >= 40 && h >= 10) {
+                                        lastCols = w;
+                                        lastRows = h;
+                                        return;
+                                    }
+                                }
+                                k32.CloseHandle(hConOut);
+                            }
+                            k32.FreeConsole();
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        }
 
         @Override
         public Key nextKey() {
@@ -491,7 +621,14 @@ public final class TerminalInput {
 
         @Override
         public int columns() {
-            return 80;
+            refreshDimensions();
+            return lastCols;
+        }
+
+        @Override
+        public int rows() {
+            refreshDimensions();
+            return lastRows;
         }
 
         @Override
