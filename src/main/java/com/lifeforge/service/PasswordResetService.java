@@ -3,45 +3,38 @@ package com.lifeforge.service;
 import com.lifeforge.config.AppConfig;
 import com.lifeforge.dao.PasswordResetDao;
 import com.lifeforge.dao.UserDao;
-import com.lifeforge.model.PasswordReset;
+import com.lifeforge.model.PasswordResetToken;
 import com.lifeforge.model.User;
 import com.lifeforge.util.PasswordUtil;
 import com.lifeforge.util.ValidationUtil;
 
 import java.security.SecureRandom;
 import java.sql.SQLException;
-import java.time.LocalDateTime;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalTime;
+import java.time.temporal.ChronoUnit;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Password reset flow: request a code, verify it, then set a new password.
- *
- * <p>Security properties enforced here:
- * <ul>
- *   <li>The plaintext code is never stored - only its BCrypt hash hits the DB.</li>
- *   <li>Codes expire (default 10 minutes) and are single-use.</li>
- *   <li>Codes have a bounded attempt budget; exhausting it forces a new code.</li>
- *   <li>Generating a new code invalidates every previous code for the user.</li>
- *   <li>Whether or not the email matches an account is never revealed - callers
- *       always get the same generic confirmation.</li>
- *   <li>Requests follow an administrator approval state machine:
- *       PENDING -> APPROVED -> COMPLETED, or PENDING -> REJECTED. A new password
- *       can only be set once an administrator has approved the request.</li>
- * </ul>
+ * Self-service password reset flow:
+ * 1. User requests a reset using their username or registered email.
+ * 2. System validates account existence, generates a 6-digit OTP valid for 5 minutes,
+ *    stores it in an in-memory registry, and logs it to the terminal/console.
+ * 3. User submits verification code and new password in a single direct step.
+ * 4. Password is hashed and updated immediately in PostgreSQL.
  */
-
 public class PasswordResetService {
 
-    /** State machine statuses for the password_resets.status column. */
-    public static final String STATUS_PENDING = "PENDING";
-    public static final String STATUS_APPROVED = "APPROVED";
-    public static final String STATUS_REJECTED = "REJECTED";
-    public static final String STATUS_COMPLETED = "COMPLETED";
+    /** Default OTP expiration duration (5 minutes). */
+    public static final Duration TOKEN_TTL = Duration.ofMinutes(5);
 
-    /** Generic confirmation shown for both existing and unknown emails. */
+    /** Generic confirmation shown for existing accounts. */
     public static final String GENERIC_CONFIRMATION =
-            "If an account matches this email, a verification code has been sent.";
+            "Verification code sent (valid for 5 minutes).";
 
     private final PasswordResetDao resetDao;
     private final UserDao userDao;
@@ -49,10 +42,18 @@ public class PasswordResetService {
     private final CodeDeliveryService codeDeliveryService;
     private final SecureRandom secureRandom = new SecureRandom();
 
-    // Transient in-memory copy of the issued code, ONLY used to render a
-    // development-only hint when LIFEFORGE_DEV_CODE_LOG is enabled. Never stored.
+    /** In-memory registry of active reset tokens keyed by user ID. */
+    private final Map<Long, PasswordResetToken> tokenRegistry = new ConcurrentHashMap<>();
+
+    // Transient in-memory copy of the issued code for development hints
     private String devCode;
     private Long devCodeUserId;
+
+    public PasswordResetService(UserDao userDao,
+                                AuditLogService auditLogService,
+                                CodeDeliveryService codeDeliveryService) {
+        this(null, userDao, auditLogService, codeDeliveryService);
+    }
 
     public PasswordResetService(PasswordResetDao resetDao, UserDao userDao,
                                 AuditLogService auditLogService,
@@ -80,17 +81,14 @@ public class PasswordResetService {
             this.status = status;
         }
 
-        /** The request proceeded. {@code userId} is null when no account matched. */
         public static RequestResult accepted(Long userId, String message) {
             return new RequestResult(true, message, userId, null);
         }
 
-        /** The request proceeded and carries the current state-machine status. */
         public static RequestResult statused(Long userId, String status, String message) {
             return new RequestResult(true, message, userId, status);
         }
 
-        /** The request could not proceed (bad format or internal error). */
         public static RequestResult rejected(String message) {
             return new RequestResult(false, message, null, null);
         }
@@ -135,115 +133,108 @@ public class PasswordResetService {
     }
 
     // ------------------------------------------------------------------
-    // Flow
+    // Self-Service Flow
     // ------------------------------------------------------------------
-    public RequestResult requestReset(String email) {
-        String formatCheck = ValidationUtil.validateEmail(email);
-        if (formatCheck != null) {
-            return RequestResult.rejected(formatCheck);
+
+    /**
+     * Step 1: Request reset code by username or registered email.
+     */
+    public RequestResult requestReset(String usernameOrEmail) {
+        if (usernameOrEmail == null || usernameOrEmail.isBlank()) {
+            return RequestResult.rejected("Please enter your username or registered email.");
         }
-        String normalized = email.trim().toLowerCase(Locale.ROOT);
+        String input = usernameOrEmail.trim();
         try {
-            Optional<User> found = userDao.findByEmail(normalized);
+            Optional<User> found = userDao.findByEmailOrUsername(input);
             if (found.isEmpty()) {
-                // Deliberately identical outcome - nothing to reveal.
-                return RequestResult.accepted(null, GENERIC_CONFIRMATION);
+                return RequestResult.rejected("No account found matching '" + input + "'.");
             }
             User user = found.get();
-            Optional<PasswordReset> existing = resetDao.findLatestByUser(user.getId());
-            if (existing.isPresent()) {
-                PasswordReset request = existing.get();
-                String status = request.getStatus();
-                if (STATUS_PENDING.equals(status) || STATUS_APPROVED.equals(status)) {
-                    // An active request is already in flight - don't create a duplicate.
-                    return RequestResult.statused(request.getUserId(), status, messageForStatus(status));
-                }
-                // COMPLETED or REJECTED: that cycle is over, a new request is allowed.
+            if (user.isBlocked()) {
+                return RequestResult.rejected("This account has been blocked. Please contact support.");
             }
-            issueCode(user);
-            return RequestResult.statused(user.getId(), STATUS_PENDING,
-                    "Your request has been submitted and is awaiting administrator approval.");
+
+            String code = issueCode(user);
+            return RequestResult.accepted(user.getId(), "Verification code sent (valid for 5 minutes).");
         } catch (SQLException e) {
-            return RequestResult.rejected(
-                    "Password reset is temporarily unavailable. Please try again later.");
+            return RequestResult.rejected("Password reset is temporarily unavailable. Please try again later.");
         }
     }
 
-    private String messageForStatus(String status) {
-        if (status == null) {
-            return GENERIC_CONFIRMATION;
-        }
-        switch (status) {
-            case STATUS_APPROVED:
-                return "Your password reset request has been approved. You can now create a new password.";
-            case STATUS_REJECTED:
-                return "Your password reset request was rejected by an administrator. "
-                        + "Please contact support for assistance.";
-            case STATUS_COMPLETED:
-                return "Your password has already been reset. Please log in with your new password.";
-            case STATUS_PENDING:
-            default:
-                return "Your password reset request is still awaiting administrator approval.";
-        }
-    }
-
+    /**
+     * Resend a new verification code for the user.
+     */
     public RequestResult resendCode(Long userId) {
         if (userId == null) {
-            return RequestResult.accepted(null, GENERIC_CONFIRMATION);
+            return RequestResult.rejected("Invalid reset session. Please start over.");
         }
         try {
             Optional<User> found = userDao.findById(userId);
             if (found.isEmpty()) {
-                return RequestResult.accepted(null, GENERIC_CONFIRMATION);
+                return RequestResult.rejected("No account found for this reset session.");
             }
-            issueCode(found.get());
-            return RequestResult.accepted(userId, GENERIC_CONFIRMATION);
+            User user = found.get();
+            if (user.isBlocked()) {
+                return RequestResult.rejected("This account has been blocked. Please contact support.");
+            }
+            String code = issueCode(user);
+            return RequestResult.accepted(userId, "New verification code sent (valid for 5 minutes).");
         } catch (SQLException e) {
-            return RequestResult.rejected(
-                    "Resending the code is temporarily unavailable. Please try again later.");
+            return RequestResult.rejected("Resending the code is temporarily unavailable. Please try again later.");
         }
     }
 
+    /**
+     * Validates a verification code without setting a new password.
+     */
     public VerifyResult verifyCode(Long userId, String code) {
         if (userId == null || code == null) {
-            return VerifyResult.fail(invalidCodeMessage());
+            return VerifyResult.fail("Invalid verification request.");
         }
         String candidate = code.trim();
-        if (!candidate.matches("\\d{" + AppConfig.RESET_CODE_LENGTH + "}")) {
-            return VerifyResult.fail("The verification code must be exactly "
-                    + AppConfig.RESET_CODE_LENGTH + " digits.");
+        if (!candidate.matches("\\d{6}")) {
+            return VerifyResult.fail("The verification code must be exactly 6 digits.");
         }
-        try {
-            Optional<PasswordReset> active = resetDao.findActiveByUser(userId);
-            if (active.isEmpty()) {
-                return VerifyResult.fail(invalidCodeMessage());
-            }
-            PasswordReset record = active.get();
-            int usedAttempts = record.getAttemptCount();
-            int maxAttempts = AppConfig.getResetCodeMaxAttempts();
-            if (usedAttempts >= maxAttempts) {
-                resetDao.markUsed(record.getId());
-                return VerifyResult.fail("Too many incorrect attempts. Use Resend Code for a fresh one.");
-            }
-            if (!PasswordUtil.verify(candidate, record.getCodeHash())) {
-                int next = usedAttempts + 1;
-                resetDao.setAttemptCount(record.getId(), next);
-                if (next >= maxAttempts) {
-                    resetDao.markUsed(record.getId());
-                    return VerifyResult.fail("Too many incorrect attempts. Use Resend Code for a fresh one.");
-                }
-                return VerifyResult.fail("Incorrect verification code. "
-                        + (maxAttempts - next) + " attempt(s) remaining.");
-            }
-            resetDao.markUsed(record.getId());
-            clearDevCode();
-            return VerifyResult.ok();
-        } catch (SQLException e) {
-            return VerifyResult.fail("Verification could not be completed. Please try again.");
+        PasswordResetToken token = tokenRegistry.get(userId);
+        if (token == null) {
+            return VerifyResult.fail("No active verification code found. Please request a new one.");
         }
+        if (token.isExpired()) {
+            tokenRegistry.remove(userId);
+            return VerifyResult.fail("Verification code has expired (valid for 5 minutes). Please request a new code.");
+        }
+        if (!token.getCode().equals(candidate)) {
+            return VerifyResult.fail("Incorrect verification code.");
+        }
+        return VerifyResult.ok();
     }
 
-    public ResetResult resetPassword(Long userId, String newPassword, String confirmPassword) {
+    /**
+     * Combined verification and password reset in a single self-service step.
+     */
+    public ResetResult resetPassword(Long userId, String code, String newPassword, String confirmPassword) {
+        if (userId == null) {
+            return ResetResult.fail("This reset session is no longer valid. Please request a new code.");
+        }
+        if (code == null || code.isBlank()) {
+            return ResetResult.fail("Verification code is required.");
+        }
+        String candidate = code.trim();
+        if (!candidate.matches("\\d{6}")) {
+            return ResetResult.fail("The verification code must be exactly 6 digits.");
+        }
+        PasswordResetToken token = tokenRegistry.get(userId);
+        if (token == null) {
+            return ResetResult.fail("This reset session is no longer valid. Please request a new code.");
+        }
+        if (token.isExpired()) {
+            tokenRegistry.remove(userId);
+            return ResetResult.fail("Verification code has expired (valid for 5 minutes). Please request a new code.");
+        }
+        if (!token.getCode().equals(candidate)) {
+            return ResetResult.fail("Incorrect verification code.");
+        }
+
         String passwordCheck = ValidationUtil.validatePassword(newPassword);
         if (passwordCheck != null) {
             return ResetResult.fail(passwordCheck);
@@ -252,87 +243,95 @@ public class PasswordResetService {
         if (confirmCheck != null) {
             return ResetResult.fail(confirmCheck);
         }
-        if (userId == null) {
-            return ResetResult.fail("This reset session is no longer valid. Please request a new code.");
-        }
+
         try {
             Optional<User> found = userDao.findById(userId);
             if (found.isEmpty()) {
-                return ResetResult.fail("This reset session is no longer valid. Please request a new code.");
-            }
-            Optional<PasswordReset> latest = resetDao.findLatestByUser(userId);
-            if (latest.isEmpty()) {
-                return ResetResult.fail("This reset session is no longer valid. Please request a new code.");
-            }
-            PasswordReset request = latest.get();
-            String status = request.getStatus();
-            if (!STATUS_APPROVED.equals(status)) {
-                return ResetResult.fail(blockedReason(status));
+                return ResetResult.fail("User account not found.");
             }
             userDao.updatePassword(userId, PasswordUtil.hash(newPassword));
-            resetDao.markCompleted(request.getId());
+            tokenRegistry.remove(userId);
             clearDevCode();
             auditLogService.log(userId, "PASSWORD_RESET_COMPLETED", "USER", userId,
-                    "Password reset completed after administrator approval.");
+                    "Self-service password reset completed successfully.");
             return ResetResult.ok();
         } catch (SQLException e) {
             return ResetResult.fail("Password reset failed due to a database error. Please try again.");
         }
     }
 
-    private String blockedReason(String status) {
-        if (status == null) {
-            return "This reset session is no longer valid. Please request a new code.";
+    /**
+     * Overload for callers who already validated the code in a previous step.
+     */
+    public ResetResult resetPassword(Long userId, String newPassword, String confirmPassword) {
+        if (userId == null) {
+            return ResetResult.fail("This reset session is no longer valid. Please request a new code.");
         }
-        switch (status) {
-            case STATUS_REJECTED:
-                return "This password reset request was rejected by an administrator. "
-                        + "Please contact support for assistance.";
-            case STATUS_COMPLETED:
-                return "This password reset has already been completed. "
-                        + "Please log in with your new password.";
-            case STATUS_PENDING:
-            default:
-                return "This password reset request is still awaiting administrator approval. "
-                        + "Please try again later.";
-        }
+        PasswordResetToken token = tokenRegistry.get(userId);
+        String code = token != null ? token.getCode() : "";
+        return resetPassword(userId, code, newPassword, confirmPassword);
     }
 
     // ------------------------------------------------------------------
-    // Delivery / debug helpers
+    // Helpers
     // ------------------------------------------------------------------
-    private String invalidCodeMessage() {
-        return "That code is invalid or has expired. Use Resend Code for a fresh one.";
-    }
 
-    private String issueCode(User user) throws SQLException {
+    private String issueCode(User user) {
         String code = generateCode();
-        PasswordReset record = new PasswordReset();
-        record.setUserId(user.getId());
-        record.setCodeHash(PasswordUtil.hash(code));
-        record.setExpiresAt(LocalDateTime.now()
-                .plusMinutes(AppConfig.getResetCodeExpirationMinutes()));
-        // A fresh code supersedes every previous one for this user.
-        resetDao.invalidateForUser(user.getId());
-        resetDao.create(record);
-        codeDeliveryService.deliver(user.getEmail(), code);
+        Instant expiry = Instant.now().plus(TOKEN_TTL);
+        PasswordResetToken token = new PasswordResetToken(user.getId(), user.getUsername(), user.getEmail(), code, expiry);
+        tokenRegistry.put(user.getId(), token);
+
+        // Terminal / console logging
+        LocalTime expiryTime = LocalTime.now().plusMinutes(5).truncatedTo(ChronoUnit.SECONDS);
+        System.out.println();
+        System.out.println("=======================================================");
+        System.out.println("🔑 PASSWORD RESET VERIFICATION CODE: " + code);
+        System.out.println("   Account  : " + (user.getUsername() != null ? user.getUsername() : user.getEmail()));
+        System.out.println("   Validity : 5 minutes (expires at " + expiryTime + ")");
+        System.out.println("=======================================================");
+        System.out.println();
+
+        // Deliver via delivery service if configured
+        if (codeDeliveryService != null && user.getEmail() != null) {
+            codeDeliveryService.deliver(user.getEmail(), code);
+        }
+
         rememberDevCode(user.getId(), code);
         auditLogService.log(user.getId(), "PASSWORD_RESET_REQUESTED", "USER", user.getId(),
-                "Password reset verification code issued for account.");
+                "Password reset verification code issued.");
         return code;
     }
 
     private String generateCode() {
-        int digitSpace = (int) Math.pow(10, AppConfig.RESET_CODE_LENGTH);
-        return String.format(Locale.ROOT, "%0" + AppConfig.RESET_CODE_LENGTH + "d",
-                secureRandom.nextInt(digitSpace));
+        return String.format(Locale.ROOT, "%06d", secureRandom.nextInt(1_000_000));
     }
 
-    /**
-     * Dev-only plaintext code for the TUI hint. Returns null unless
-     * LIFEFORGE_DEV_CODE_LOG is enabled - the value never reaches the UI
-     * in production.
-     */
+    public Optional<PasswordResetToken> getToken(Long userId) {
+        return Optional.ofNullable(tokenRegistry.get(userId));
+    }
+
+    public String getActiveCode(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        PasswordResetToken token = tokenRegistry.get(userId);
+        if (token != null && !token.isExpired()) {
+            return token.getCode();
+        }
+        return null;
+    }
+
+    public void setTokenForTest(Long userId, PasswordResetToken token) {
+        if (token != null) {
+            tokenRegistry.put(userId, token);
+            rememberDevCode(userId, token.getCode());
+        } else {
+            tokenRegistry.remove(userId);
+            clearDevCode();
+        }
+    }
+
     public String devLastCode(Long userId) {
         if (!AppConfig.isDevResetCodeLoggingEnabled()) {
             return null;

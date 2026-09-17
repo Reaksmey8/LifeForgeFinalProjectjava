@@ -53,6 +53,7 @@ public class AppContext {
     public final SavedRecommendationController savedRecommendationController;
     public final AdminController adminController;
     public final ReportController reportController;
+    public final com.lifeforge.service.BookmarkService bookmarkService;
 
     private AppContext(Session session,
                        AuthController authController,
@@ -62,7 +63,8 @@ public class AppContext {
                        RecommendationController recommendationController,
                        SavedRecommendationController savedRecommendationController,
                        AdminController adminController,
-                       ReportController reportController) {
+                       ReportController reportController,
+                       com.lifeforge.service.BookmarkService bookmarkService) {
         this.session = session;
         this.authController = authController;
         this.userController = userController;
@@ -72,6 +74,7 @@ public class AppContext {
         this.savedRecommendationController = savedRecommendationController;
         this.adminController = adminController;
         this.reportController = reportController;
+        this.bookmarkService = bookmarkService;
     }   
 
     /**
@@ -113,8 +116,10 @@ public class AppContext {
 
         SavedRecommendationService savedRecommendationService =
                 new SavedRecommendationService(savedRecommendationDao);
+        com.lifeforge.service.BookmarkService bookmarkService =
+                new com.lifeforge.service.BookmarkService(savedRecommendationDao, savedRecommendationService);
 
-        AdminService adminService = new AdminService(userDao, auditLogService, passwordResetDao);
+        AdminService adminService = new AdminService(userDao, auditLogService);
         AnalyticsService analyticsService = new AnalyticsService(
                 userDao, userGoalDao, goalDao, recommendationDao, savedRecommendationDao);
 
@@ -132,8 +137,7 @@ public class AppContext {
         SavedRecommendationController savedRecommendationController =
                 new SavedRecommendationController(savedRecommendationService, session);
         AdminController adminController =
-                new AdminController(adminService, analyticsService, auditLogService,
-                        passwordResetDao, session);
+                new AdminController(adminService, analyticsService, auditLogService, session);
         ReportController reportController =
                 new ReportController(jasperReportsService, recommendationService);
 
@@ -146,6 +150,7 @@ public class AppContext {
                 recommendationController,
                 savedRecommendationController,
                 adminController,
-                reportController);
+                reportController,
+                bookmarkService);
     }
 }

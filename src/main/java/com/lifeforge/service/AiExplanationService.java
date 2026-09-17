@@ -10,8 +10,12 @@ import com.lifeforge.model.RecommendationPriority;
 import com.lifeforge.model.User;
 import com.lifeforge.util.HydrationCalculator;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -21,6 +25,19 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class AiExplanationService implements RecommendationExplanationService {
+
+    public static final String OFFLINE_NOTICE =
+            "[AI Offline: Rule-based engine active. Check if Ollama is running on port 11434.]";
+
+    private final List<Map<String, String>> conversationHistory = new ArrayList<>();
+
+    public List<Map<String, String>> getConversationHistory() {
+        return Collections.unmodifiableList(conversationHistory);
+    }
+
+    public void clearConversationHistory() {
+        conversationHistory.clear();
+    }
 
     /**
      * Set to true only for local debugging. When false, the informational
@@ -104,6 +121,28 @@ public class AiExplanationService implements RecommendationExplanationService {
         }
     }
 
+    public static String buildSystemPrompt(User user, Goal currentGoal, RecommendationCategory currentCategory) {
+        String goalName = (currentGoal != null) ? currentGoal.getName() : "General Wellness";
+        String categoryName = (currentCategory != null) ? currentCategory.getName() : "General Health";
+
+        int age = (user != null && user.getAge() != null) ? user.getAge() : 0;
+        double height = (user != null && user.getHeight() != null) ? user.getHeight() : 0.0;
+        double weight = (user != null && user.getWeight() != null) ? user.getWeight() : 0.0;
+        double bmi = (user != null && user.getBmi() != null) ? user.getBmi() : 0.0;
+
+        return String.format(Locale.ROOT,
+                "You are the LIFEForge Health Assistant. " +
+                "Active Goal: '%s' | Active Category: '%s'. " +
+                "User Metrics: Age %d, Height %.1f cm, Weight %.1f kg (BMI %.1f). " +
+                "Rules: " +
+                "1. Directly answer the user's specific query (e.g., duration, routine, dosage, frequency) rather than repeating boilerplate definitions. " +
+                "2. Support all lifestyle categories (Exercise, Nutrition, Sleep, Hydration, Mental Wellness, Posture, etc.). " +
+                "3. Clinical BMI reference: <18.5 is Underweight, 18.5-24.9 is Normal, 25.0-29.9 is Overweight, >=30.0 is Obese. " +
+                "4. Keep responses grounded, actionable, and under 3 concise sentences unless explicitly asked for a list.",
+                goalName, categoryName, age, height, weight, bmi
+        );
+    }
+
     /**
      * Answers an optional user question using the current LifeForge context.
      * It cannot select, replace, edit, or persist a recommendation. Failures
@@ -125,24 +164,71 @@ public class AiExplanationService implements RecommendationExplanationService {
         Long catId = category != null ? category.getId() : null;
         String catName = category != null ? category.getName() : null;
 
+        String systemPrompt = buildSystemPrompt(user, goal, category);
+
+        // a. Ensure the system role prompt sits at index 0.
+        Map<String, String> sysMsg = new LinkedHashMap<>();
+        sysMsg.put("role", "system");
+        sysMsg.put("content", systemPrompt);
+
+        if (conversationHistory.isEmpty()) {
+            conversationHistory.add(sysMsg);
+        } else {
+            conversationHistory.set(0, sysMsg);
+        }
+
+        // b. Append {"role": "user", "content": userQuestion}.
+        Map<String, String> userMsg = new LinkedHashMap<>();
+        userMsg.put("role", "user");
+        userMsg.put("content", question.trim());
+        conversationHistory.add(userMsg);
+
         if (!isAvailable()) {
-            return chatFallback(user, goal, category, recommendation, plan, question);
+            return chatFallbackWithNotice(user, goal, category, recommendation, plan, question);
         }
         try {
-            String response = callOllama(buildChatPrompt(
-                    user, goal, category, recommendation, plan, recentConversation, question));
+            // c. POST the full messages payload to http://localhost:11434/api/chat with "stream": false.
+            String response = callOllamaChat(conversationHistory);
             if (response == null || response.isBlank()) {
-                return chatFallback(user, goal, category, recommendation, plan, question);
+                return chatFallbackWithNotice(user, goal, category, recommendation, plan, question);
             }
+            if (!isKhmerRequest(question) && containsKhmer(response)) {
+                if (VERBOSE) System.err.println("[LifeForge AI] Model leaked into Khmer on English question. Falling back to calibrated guidance.");
+                return chatFallbackWithNotice(user, goal, category, recommendation, plan, question);
+            }
+            if (containsKhmer(response)) {
+                response = sanitizeKhmerText(response);
+            }
+
+            // d. Append Ollama's response: {"role": "assistant", "content": aiReply}.
+            Map<String, String> assistantMsg = new LinkedHashMap<>();
+            assistantMsg.put("role", "assistant");
+            assistantMsg.put("content", response.trim());
+            conversationHistory.add(assistantMsg);
+
             CategoryMatch match = detectCategoryMatch(plan, question, response);
             Long suggestedId = match != null ? match.id : catId;
             String suggestedName = match != null ? match.name : catName;
             return new AiChatResponse(response.trim(), true, suggestedId, suggestedName);
         } catch (Exception e) {
             if (VERBOSE) System.err.println("[LifeForge AI] Chat request failed: "
-                    + e.getClass().getSimpleName());
-            return chatFallback(user, goal, category, recommendation, plan, question);
+                    + e.getClass().getSimpleName() + " - " + e.getMessage());
+            return chatFallbackWithNotice(user, goal, category, recommendation, plan, question);
         }
+    }
+
+    private AiChatResponse chatFallbackWithNotice(User user, Goal goal, RecommendationCategory category,
+                                                  Recommendation recommendation, PersonalizedPlanResult plan,
+                                                  String question) {
+        AiChatResponse base = chatFallback(user, goal, category, recommendation, plan, question);
+        String textWithNotice = OFFLINE_NOTICE + "\n\n" + base.text;
+
+        Map<String, String> assistantMsg = new LinkedHashMap<>();
+        assistantMsg.put("role", "assistant");
+        assistantMsg.put("content", textWithNotice);
+        conversationHistory.add(assistantMsg);
+
+        return new AiChatResponse(textWithNotice, false, base.suggestedCategoryId, base.suggestedCategoryName);
     }
 
     public AiChatResponse chatFallback(User user, Goal goal, RecommendationCategory category,
@@ -162,6 +248,29 @@ public class AiExplanationService implements RecommendationExplanationService {
 
         StringBuilder sb = new StringBuilder();
         String qLower = question != null ? question.toLowerCase(Locale.ROOT).trim() : "";
+
+        // Check if user is asking for Khmer translation or Khmer guidance
+        if (qLower.contains("khmer") || qLower.contains("ខ្មែរ")) {
+            sb.append("ការណែនាំជាភាសាខ្មែរ សម្រាប់គោលដៅ ").append(goalName).append(":\n\n");
+            if (goalName.toLowerCase(Locale.ROOT).contains("skin")) {
+                sb.append("• ការទទួលទានជាតិទឹក: ផឹកទឹកឱ្យបាន ២.០ ដល់ ២.៥ លីត្រជារៀងរាល់ថ្ងៃ ដើម្បីរក្សាសំណើមស្បែក និងជំរុញការបណ្តេញជាតិពុល។\n");
+                sb.append("• អាហារូបត្ថម្ភជំនួយស្បែក: ផ្តោតលើបន្លែស្រស់ ផ្លែឈើសម្បូរវីតាមីន C និង E ប្រូតេអ៊ីនគ្មានខ្លាញ់ និងខ្លាញ់ល្អ (Omega-3)។\n");
+                sb.append("• ទម្លាប់ប្រចាំថ្ងៃ: លាងសម្អាតមុខថ្នមៗ គេងឱ្យបាន ៧-៩ ម៉ោងក្នុងមួយយប់ និងការពារស្បែកពីពន្លឺព្រះអាទិត្យ។\n");
+            } else if (goalName.toLowerCase(Locale.ROOT).contains("muscle")) {
+                sb.append("• ការទទួលទានប្រូតេអ៊ីន: ទទួលទានប្រូតេអ៊ីនឱ្យបានទៀងទាត់ក្នុងគ្រប់ពេលបាយ ដើម្បីជួសជុល និងកសាងសាច់ដុំ។\n");
+                sb.append("• ការហាត់ប្រាណ: ផ្តោតលើការហាត់ទម្ងន់ ៣ ទៅ ៤ ដងក្នុងមួយសប្តាហ៍ ដើម្បីជំរុញការលូតលាស់សាច់ដុំ។\n");
+                sb.append("• ការសម្រាក: គេងឱ្យបានគ្រប់គ្រាន់ ៧-៩ ម៉ោង ដើម្បីឱ្យរាងកាយស្តារកម្លាំង និងជាលិកាសាច់ដុំឡើងវិញ។\n");
+            } else if (goalName.toLowerCase(Locale.ROOT).contains("weight") || goalName.toLowerCase(Locale.ROOT).contains("fat")) {
+                sb.append("• របបអាហារ: ទទួលទានអាហារសម្បូរជាតិសរសៃ និងប្រូតេអ៊ីន ដើម្បីជួយឱ្យឆ្អែតបានយូរ និងគ្រប់គ្រងកាឡូរី។\n");
+                sb.append("• ជាតិទឹក: ផឹកទឹកមុនពេលបាយ ដើម្បីជួយសម្រួលដល់ការរំលាយអាហារ និងកាត់បន្ថយការឃ្លាន។\n");
+                sb.append("• សកម្មភាពរាងកាយ: បង្កើនការដើរ និងធ្វើចលនារាងកាយឱ្យបានទៀងទាត់ជារៀងរាល់ថ្ងៃ។\n");
+            } else {
+                sb.append("• ជាតិទឹក: ផឹកទឹកឱ្យបានគ្រប់គ្រាន់ជារៀងរាល់ថ្ងៃ ដើម្បីទ្រទ្រង់មុខងារកោសិកា។\n");
+                sb.append("• អាហារូបត្ថម្ភ: ទទួលទានអាហារមានតុល្យភាព សម្បូរជីវជាតិ និងកាត់បន្ថយអាហារកែច្នៃ។\n");
+                sb.append("• ដំណេក និងការសម្រាក: រក្សាពេលវេលាគេងឱ្យបានទៀងទាត់ ដើម្បីសុខភាពរាងកាយ និងផ្លូវចិត្តល្អ។\n");
+            }
+            return new AiChatResponse(sb.toString().trim(), false, catId, catName);
+        }
 
         // Check if user is asking about hydration
         if (qLower.contains("water") || qLower.contains("hydration") || qLower.contains("drink") || qLower.contains("liters")) {
@@ -187,22 +296,22 @@ public class AiExplanationService implements RecommendationExplanationService {
             return new AiChatResponse(sb.toString().trim(), false, resId, resName);
         }
 
-        // Check if user is asking about sleep
-        if (qLower.contains("sleep") || qLower.contains("rest") || qLower.contains("bedtime") || qLower.contains("recovery")) {
+        // Check if user is asking about sleep or in sleep context
+        boolean isSleepQuery = qLower.contains("sleep") || qLower.contains("rest") || qLower.contains("bedtime")
+                || qLower.contains("recovery") || qLower.contains("slep")
+                || ((category != null && category.getName() != null && category.getName().toLowerCase(Locale.ROOT).contains("sleep"))
+                    && (qLower.contains("time") || qLower.contains("how many") || qLower.contains("hour") || qLower.contains("effective") || qLower.contains("good")));
+
+        if (isSleepQuery) {
             PersonalizedPlanResult.AreaItem sleepArea = findAreaByKeyword(plan, "sleep");
-            sb.append("Sleep & Recovery Guidance for ").append(goalName).append(":\n\n");
-            sb.append("• Suggested Target: 7–9 hours of quality, restorative sleep each night.\n");
-            if (sleepArea != null && sleepArea.recommendation() != null) {
-                if (sleepArea.recommendation().getRecommendedActions() != null) {
-                    sb.append("• Actions: ").append(sleepArea.recommendation().getRecommendedActions().replaceAll("\\r?\\n+", " ")).append("\n");
-                }
-            }
+            sb.append("Consistent sleep duration stabilizes your circadian rhythm and supports ").append(goalName).append(".\n\n");
+            sb.append("- Target Duration: Aim for 7–9 hours of continuous sleep nightly rather than compensating with long sleep sessions.\n");
             if (goalName.toLowerCase(Locale.ROOT).contains("skin")) {
-                sb.append("• Skin Health Focus: Peak skin cell repair and collagen regeneration occur during deep sleep. Adequate rest lowers cortisol, reducing breakouts and redness.\n");
-                sb.append("• Routine: Maintain a consistent sleep schedule and limit screen exposure 30–60 minutes before bedtime.\n");
+                sb.append("- Skin Repair: Deep sleep stimulates collagen production and cellular repair while reducing cortisol levels.\n");
             } else {
-                sb.append("• Recovery Focus: Consistent sleep optimizes hormonal balance, physical recovery, and mental clarity.\n");
+                sb.append("- Hormonal Balance: Predictable sleep schedules optimize nighttime growth hormone and immune function.\n");
             }
+            sb.append("- Consistency: Keep identical bed and wake times every day to maximize restorative sleep quality.\n");
             Long resId = (sleepArea != null && sleepArea.category() != null) ? sleepArea.category().getId() : catId;
             String resName = (sleepArea != null && sleepArea.category() != null) ? sleepArea.category().getName() : catName;
             return new AiChatResponse(sb.toString().trim(), false, resId, resName);
@@ -306,25 +415,73 @@ public class AiExplanationService implements RecommendationExplanationService {
         if (question == null || question.isBlank()) {
             return new AiChatResponse("Please enter a question for the AI assistant.", false);
         }
+
+        String systemPrompt = buildSystemPrompt(user, goal, null);
+
+        // a. Ensure the system role prompt sits at index 0.
+        Map<String, String> sysMsg = new LinkedHashMap<>();
+        sysMsg.put("role", "system");
+        sysMsg.put("content", systemPrompt);
+
+        if (conversationHistory.isEmpty()) {
+            conversationHistory.add(sysMsg);
+        } else {
+            conversationHistory.set(0, sysMsg);
+        }
+
+        // b. Append {"role": "user", "content": userQuestion}.
+        Map<String, String> userMsg = new LinkedHashMap<>();
+        userMsg.put("role", "user");
+        userMsg.put("content", question.trim());
+        conversationHistory.add(userMsg);
+
         if (!isAvailable()) {
-            return globalFallback(user, goal, plan, calorieSummary, hydrationLiters, calorieRelevant, question);
+            return globalFallbackWithNotice(user, goal, plan, calorieSummary, hydrationLiters, calorieRelevant, question);
         }
         try {
-            String prompt = buildGlobalAssistantPrompt(
-                    user, goal, plan, calorieSummary, hydrationLiters, calorieRelevant, recentConversation, question);
-            String response = callOllama(prompt);
+            // c. POST the full messages payload to http://localhost:11434/api/chat with "stream": false.
+            String response = callOllamaChat(conversationHistory);
             if (response == null || response.isBlank()) {
-                return globalFallback(user, goal, plan, calorieSummary, hydrationLiters, calorieRelevant, question);
+                return globalFallbackWithNotice(user, goal, plan, calorieSummary, hydrationLiters, calorieRelevant, question);
             }
+            if (!isKhmerRequest(question) && containsKhmer(response)) {
+                if (VERBOSE) System.err.println("[LifeForge AI] Global model leaked into Khmer on English question. Falling back to calibrated guidance.");
+                return globalFallbackWithNotice(user, goal, plan, calorieSummary, hydrationLiters, calorieRelevant, question);
+            }
+            if (containsKhmer(response)) {
+                response = sanitizeKhmerText(response);
+            }
+
+            // d. Append Ollama's response: {"role": "assistant", "content": aiReply}.
+            Map<String, String> assistantMsg = new LinkedHashMap<>();
+            assistantMsg.put("role", "assistant");
+            assistantMsg.put("content", response.trim());
+            conversationHistory.add(assistantMsg);
+
             CategoryMatch match = detectCategoryMatch(plan, question, response);
             Long catId = match != null ? match.id : null;
             String catName = match != null ? match.name : null;
             return new AiChatResponse(response.trim(), true, catId, catName);
         } catch (Exception e) {
             if (VERBOSE) System.err.println("[LifeForge AI] Global chat request failed: "
-                    + e.getClass().getSimpleName());
-            return globalFallback(user, goal, plan, calorieSummary, hydrationLiters, calorieRelevant, question);
+                    + e.getClass().getSimpleName() + " - " + e.getMessage());
+            return globalFallbackWithNotice(user, goal, plan, calorieSummary, hydrationLiters, calorieRelevant, question);
         }
+    }
+
+    private AiChatResponse globalFallbackWithNotice(User user, Goal goal, PersonalizedPlanResult plan,
+                                                    CalorieService.CalorieSummary calorieSummary,
+                                                    double hydrationLiters, boolean calorieRelevant,
+                                                    String question) {
+        AiChatResponse base = globalFallback(user, goal, plan, calorieSummary, hydrationLiters, calorieRelevant, question);
+        String textWithNotice = OFFLINE_NOTICE + "\n\n" + base.text;
+
+        Map<String, String> assistantMsg = new LinkedHashMap<>();
+        assistantMsg.put("role", "assistant");
+        assistantMsg.put("content", textWithNotice);
+        conversationHistory.add(assistantMsg);
+
+        return new AiChatResponse(textWithNotice, false, base.suggestedCategoryId, base.suggestedCategoryName);
     }
 
     private record CategoryMatch(Long id, String name) {}
@@ -560,10 +717,17 @@ public class AiExplanationService implements RecommendationExplanationService {
                 - Do not substitute or calculate alternative formulas or ranges (e.g. do not invent protein g/kg/day numbers).
                 - For nutrition, emphasize qualitative guidance (protein-rich foods, vegetables & fiber, complex carbs, balanced meals).
 
-                RESPONSE STYLE:
-                - Answer directly, clearly, and concisely.
-                - Use structured bullet points where helpful so it is easy to read in a terminal frame.
-                - Keep responses within 3-6 short paragraphs or bulleted sections.
+                RESPONSE STYLE (STRICT):
+                - BREVITY: Keep answers strictly under 80–100 words. Never output walls of text.
+                - NO PSEUDO-SCIENCE: Strictly avoid buzzwords like "toxin buildup", "flushing toxins", or detox claims. Focus on biological recovery and hydration.
+                - NO UNCALIBRATED NUMBERS: Do not invent new gram, milliliter, or calorie figures. Quote only the user's existing calibrated Rule Engine targets.
+                - TUI CLEANLINESS: Do not use Markdown asterisks (**bold**). Use clean plaintext with hyphen bullets (-).
+                - STRUCTURE: Provide 1 brief sentence explaining the core cause or mechanism, followed by 2–3 short, actionable bullet points.
+                - LANGUAGE MATCHING (CRITICAL):
+                  * Always respond in the EXACT same language as the user's latest question.
+                  * If the user writes in English, reply STRICTLY in English.
+                  * NEVER switch to or output Khmer unless the user explicitly writes in Khmer script or explicitly asks "translate to Khmer".
+                - Answer directly, clearly, and concisely without filler greetings or fluff.
 
                 USER PROFILE:
                 """);
@@ -666,15 +830,18 @@ public class AiExplanationService implements RecommendationExplanationService {
                   or "the target" may refer to protein, the recommendation, or a goal
                   mentioned earlier in the conversation.
 
-                RESPONSE STYLE:
-                - Answer the question FIRST, then add a short practical explanation.
-                - Keep responses concise: roughly 3-8 short paragraphs or bullet points,
-                  matching the complexity of the question. Simple questions get simple answers.
-                - Use bullets when they make the answer easier to scan.
-                - Do not restate the entire recommendation.
+                RESPONSE STYLE (STRICT RULES):
+                - 1. BREVITY: Keep answers strictly under 80–100 words. Never output walls of text.
+                - 2. NO PSEUDO-SCIENCE: Strictly avoid buzzwords like "toxin buildup", "flushing toxins", or detox claims. Focus on biological recovery and hydration.
+                - 3. NO UNCALIBRATED NUMBERS: Do not invent new gram, milliliter, or calorie figures. Quote or direct the user to their existing calibrated Rule Engine targets.
+                - 4. TUI CLEANLINESS: Do not use Markdown asterisks (**bold**). Use clean plaintext with hyphen bullets (-).
+                - 5. STRUCTURE: Provide 1 brief sentence explaining the core cause, followed by 2–3 short, actionable bullet points.
+                - 6. LANGUAGE MATCHING (CRITICAL):
+                  * Always respond in the EXACT same language as the user's latest question.
+                  * If the user writes in English, reply STRICTLY in English.
+                  * NEVER switch to or output Khmer unless the user explicitly writes in Khmer script or explicitly asks to translate into Khmer.
+                  * If the user explicitly asks for Khmer, provide natural, grammatically correct Khmer writing words contiguously without inserting spaces inside words.
                 - Do not add unnecessary greetings or filler.
-                - The official LIFEForge target remains the source of truth; you may
-                  reference it, but do not change it.
 
                 USER PROFILE:
                 """);
@@ -745,10 +912,26 @@ public class AiExplanationService implements RecommendationExplanationService {
                 You are the AI explanation assistant for LifeForge,
                 a personalized health and lifestyle recommendation system.
 
-                IMPORTANT:
+                TONE AND PERSPECTIVE (MANDATORY):
+                - Address the user directly in the second person ("you", "your").
+                - Strictly NEVER use third-person medical phrasing (do NOT use "this user", "the user", "the patient", "his", or "her").
+                - Do NOT include tautological boilerplate like "LIFEForge selected this because it aligns with your goal".
+                - Explain WHY this specific recommendation and target physiologically benefit your body and support your goal.
+
+                FORMAT AND STRUCTURE (STRICT):
+                - Ban multi-sentence narrative text blocks.
+                - Restrict your output to strictly 3 bullet points, no more and no less.
+                - Every bullet point must strictly follow this format:
+                  • [Keyword / Tag] : [One clear, concise sentence explaining the physiological impact]
+                - Examples:
+                  • Protein Synthesis : Sustained protein intake delivers essential amino acids required to stimulate muscle protein synthesis.
+                  • Metabolic Regulation : Quality protein exerts a high thermic effect, supporting steady glucose metabolism.
+                  • Tissue Adaptation : Consistent distribution across meals ensures your body maintains positive nitrogen balance.
+                - Exactly ONE clear, concise sentence per bullet point explaining the physiological impact on your body. Do NOT write multiple sentences in any bullet.
+
+                IMPORTANT GUARDRAILS:
                 - Do NOT create a new recommendation.
                 - Do NOT change the existing recommendation.
-                - Explain WHY the existing recommendation fits the user.
                 - Use only the information provided below.
                 - The "Suggested Target" given below is the ONLY official
                   numeric target. Do NOT calculate, cite, or mention any
@@ -760,8 +943,6 @@ public class AiExplanationService implements RecommendationExplanationService {
                   verbatim.
                 - Do not invent medical diagnoses.
                 - Do not provide dangerous or extreme dieting advice.
-                - Keep the answer friendly and concise.
-                - Write exactly 2-3 sentences.
 
                 USER PROFILE:
                 """);
@@ -831,8 +1012,8 @@ public class AiExplanationService implements RecommendationExplanationService {
         sb.append("""
 
                 TASK:
-                Explain why this existing recommendation is appropriate
-                for this specific user.
+                Explain directly to the user in the second person ("you", "your") why this recommendation
+                works for their body, using strictly 3 bullet points in the "• [Keyword / Tag] : [One clear, concise sentence explaining the physiological impact]" format.
                 """);
 
         return sb.toString();
@@ -850,101 +1031,111 @@ public class AiExplanationService implements RecommendationExplanationService {
         }
     }
 
-    private String callOllama(String prompt) throws Exception {
+    public static boolean isKhmerRequest(String q) {
+        if (q == null) return false;
+        String lower = q.toLowerCase(Locale.ROOT);
+        if (lower.contains("khmer") || lower.contains("cambodia") || lower.contains("translate to khmer")) {
+            return true;
+        }
+        return containsKhmer(q);
+    }
 
+    public static boolean containsKhmer(String s) {
+        if (s == null) return false;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= '\u1780' && c <= '\u17FF') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static String sanitizeKhmerText(String text) {
+        if (text == null || text.isEmpty()) return text;
+        String s = text.replaceAll("\\u17D2\\s+", "\u17D2");
+        s = s.replaceAll("\\s+([\\u17B4-\\u17D3\\u17DD])", "$1");
+        s = s.replaceAll("([\\u17B7-\\u17BD\\u17C6\\u17CB])\\s+([\\u1780-\\u17B3])", "$1$2");
+        return s;
+    }
+
+    public String callOllamaChat(List<Map<String, String>> messages) throws Exception {
         String baseUrl = AppConfig.getOllamaBaseUrl();
         String model = AppConfig.getOllamaModel();
 
-        if (VERBOSE) System.out.println(
-                "[LifeForge AI] URL: " + baseUrl
-        );
+        if (VERBOSE) {
+            System.out.println("[LifeForge AI] Chat URL: " + baseUrl + "/api/chat");
+            System.out.println("[LifeForge AI] Model: " + model);
+        }
 
-        if (VERBOSE) System.out.println(
-                "[LifeForge AI] Model: " + model
-        );
-
-        String requestBody =
-                "{"
-                        + "\"model\":" + jsonString(model) + ","
-                        + "\"prompt\":" + jsonString(prompt) + ","
-                        + "\"stream\":false"
-                        + "}";
+        StringBuilder json = new StringBuilder();
+        json.append("{");
+        json.append("\"model\":").append(jsonString(model)).append(",");
+        json.append("\"messages\":[");
+        for (int i = 0; i < messages.size(); i++) {
+            if (i > 0) json.append(",");
+            Map<String, String> m = messages.get(i);
+            json.append("{");
+            json.append("\"role\":").append(jsonString(m.get("role"))).append(",");
+            json.append("\"content\":").append(jsonString(m.get("content")));
+            json.append("}");
+        }
+        json.append("],");
+        json.append("\"stream\":false");
+        json.append("}");
 
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + "/api/generate"))
-                .timeout(Duration.ofSeconds(120))
-                .header(
-                        "Content-Type",
-                        "application/json"
-                )
-                .POST(
-                        HttpRequest.BodyPublishers.ofString(
-                                requestBody
-                        )
-                )
+                .uri(URI.create(baseUrl + "/api/chat"))
+                .timeout(Duration.ofSeconds(60))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(json.toString()))
                 .build();
 
-        if (VERBOSE) System.out.println(
-                "[LifeForge AI] Calling Ollama..."
+        if (VERBOSE) {
+            System.out.println("[LifeForge AI] Calling Ollama /api/chat...");
+        }
+
+        HttpResponse<String> response = httpClient.send(
+                request,
+                HttpResponse.BodyHandlers.ofString()
         );
 
-        HttpResponse<String> response =
-                httpClient.send(
-                        request,
-                        HttpResponse.BodyHandlers.ofString()
-                );
-
-        if (VERBOSE) System.out.println(
-                "[LifeForge AI] HTTP Status: "
-                        + response.statusCode()
-        );
+        if (VERBOSE) {
+            System.out.println("[LifeForge AI] HTTP Status: " + response.statusCode());
+        }
 
         if (response.statusCode() != 200) {
-
             if (VERBOSE) {
-                System.err.println(
-                        "[LifeForge AI] Ollama error body:"
-                );
-
-                System.err.println(
-                        response.body()
-                );
+                System.err.println("[LifeForge AI] Ollama chat error body: " + response.body());
             }
-
             return null;
         }
 
         String body = response.body();
+        String extracted = extractChatResponseContent(body);
+        if (extracted == null && VERBOSE) {
+            System.err.println("[LifeForge AI] Could not extract content from Ollama chat response: " + body);
+        }
+        return extracted;
+    }
 
-        if (VERBOSE) System.out.println(
-                "[LifeForge AI] Ollama response received."
-        );
-
-        String extracted =
-                extractJsonStringField(
-                        body,
-                        "response"
-                );
-
-        if (extracted == null) {
-
-            if (VERBOSE) {
-                System.err.println(
-                        "[LifeForge AI] Could not extract "
-                                + "\"response\" from Ollama JSON."
-                );
-
-                System.err.println(
-                        "[LifeForge AI] Raw response:"
-                );
-
-                System.err.println(body);
-            }
-
+    private String extractChatResponseContent(String json) {
+        if (json == null || json.isBlank()) {
             return null;
         }
+        String regex = "\"content\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"";
+        Pattern pattern = Pattern.compile(regex, Pattern.DOTALL);
+        Matcher matcher = pattern.matcher(json);
+        if (matcher.find()) {
+            return unescapeJsonString(matcher.group(1));
+        }
+        return extractJsonStringField(json, "response");
+    }
 
-        return extracted;
+    private String callOllama(String prompt) throws Exception {
+        return callOllamaChat(List.of(
+                Map.of("role", "user", "content", prompt)
+        ));
     }
 
     private String jsonString(String value) {

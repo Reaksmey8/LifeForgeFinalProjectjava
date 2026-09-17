@@ -6,6 +6,7 @@ import com.lifeforge.model.SavedRecommendation;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Data access for saved_recommendations. A UNIQUE constraint on
@@ -14,6 +15,45 @@ import java.util.List;
  * so callers can show a friendly "already saved" message.
  */
 public class SavedRecommendationDao {
+
+    public Optional<SavedRecommendation> findSavedBySameCategory(Long userId, Long recommendationId) throws SQLException {
+        String sql = """
+                SELECT sr.id, sr.user_id, sr.recommendation_id, sr.saved_at
+                FROM saved_recommendations sr
+                JOIN recommendations r ON r.id = sr.recommendation_id
+                JOIN recommendation_categories rc ON rc.id = r.category_id
+                WHERE sr.user_id = ?
+                  AND COALESCE(rc.parent_category_id, rc.id) = (
+                      SELECT COALESCE(rc2.parent_category_id, rc2.id)
+                      FROM recommendations r2
+                      JOIN recommendation_categories rc2 ON rc2.id = r2.category_id
+                      WHERE r2.id = ?
+                  )
+                ORDER BY sr.saved_at DESC
+                LIMIT 1
+                """;
+        try (Connection conn = DatabaseConfig.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, userId);
+            ps.setLong(2, recommendationId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(mapRow(rs));
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    public void updateSavedRecommendation(Long savedRecommendationId, Long newRecommendationId) throws SQLException {
+        String sql = "UPDATE saved_recommendations SET recommendation_id = ?, saved_at = NOW() WHERE id = ?";
+        try (Connection conn = DatabaseConfig.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, newRecommendationId);
+            ps.setLong(2, savedRecommendationId);
+            ps.executeUpdate();
+        }
+    }
 
     public boolean alreadySaved(Long userId, Long recommendationId) throws SQLException {
         String sql = "SELECT 1 FROM saved_recommendations WHERE user_id = ? AND recommendation_id = ?";
@@ -24,6 +64,16 @@ public class SavedRecommendationDao {
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next();
             }
+        }
+    }
+
+    public void updateSavedAt(Long userId, Long recommendationId) throws SQLException {
+        String sql = "UPDATE saved_recommendations SET saved_at = NOW() WHERE user_id = ? AND recommendation_id = ?";
+        try (Connection conn = DatabaseConfig.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, userId);
+            ps.setLong(2, recommendationId);
+            ps.executeUpdate();
         }
     }
 

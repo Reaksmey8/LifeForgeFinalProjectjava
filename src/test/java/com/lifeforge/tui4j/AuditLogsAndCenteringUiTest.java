@@ -1,11 +1,16 @@
 package com.lifeforge.tui4j;
 
+import com.lifeforge.AppContext;
 import com.lifeforge.model.AuditLog;
 import com.lifeforge.tui4j.ScreenKit.Line;
+import com.williamcallahan.tui4j.compat.bubbletea.input.key.Key;
+import com.williamcallahan.tui4j.compat.bubbletea.input.key.KeyType;
+import com.williamcallahan.tui4j.compat.bubbletea.message.KeyPressMessage;
 import com.williamcallahan.tui4j.term.TerminalInfo;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -245,5 +250,168 @@ public class AuditLogsAndCenteringUiTest {
                         "Right border should be aligned at row " + r + " in " + termW + "x" + termH);
             }
         }
+    }
+
+    private List<AuditLog> buildSampleAuditLogs(int count) {
+        LocalDateTime base = LocalDateTime.of(2026, 9, 16, 10, 0);
+        List<AuditLog> list = new ArrayList<>();
+        String[] actions = { "LOGIN", "RESET_REQ", "REC_UPDATE", "USER_LOCK", "USER_UNLOCK", "REC_CREATE", "GOAL_UPDATE", "CAT_CREATE" };
+        String[] targets = { "USER #1", "USER #2", "REC #14", "USER #4", "USER #5", "REC #20", "GOAL #3", "CAT #7" };
+        String[] details = { "User logged in", "Reset requested", "Recommendation updated", "User blocked", "User unblocked", "Recommendation created", "Goal updated", "Category created" };
+        for (int i = 0; i < count; i++) {
+            int idx = i % actions.length;
+            list.add(new AuditLog((long) (i + 1), 1L, actions[idx], "USER", (long) (i + 1), details[idx], base.minusMinutes(i * 10)));
+        }
+        return list;
+    }
+
+    @Test
+    public void testAdminAuditPageLayoutAt80Columns() {
+        LifeForge tui = new LifeForge(AppContext.build());
+        tui.setLogs(buildSampleAuditLogs(10));
+        tui.setAuditPage(0);
+
+        String rendered = tui.renderAdminAuditPage(80);
+        assertNotNull(rendered);
+
+        String clean = rendered.replaceAll("\u001B\\[[;\\d]*m", "");
+        String[] lines = clean.split("\n", -1);
+
+        // Frame must have outer card and lines must have width 80 (except trailing blank line and footer)
+        // Check outer card border
+        assertTrue(lines[0].startsWith("┌─"), "Top line must start with ┌─: " + lines[0]);
+        assertTrue(lines[0].endsWith("┐"), "Top line must end with ┐: " + lines[0]);
+        assertTrue(lines[0].contains("LIFEForge / AUDIT LOGS (Admin)"), "Top title mismatch: " + lines[0]);
+        assertEquals(80, Theme.width(lines[0]), "Top border must be 80 cols wide");
+
+        // Top table divider
+        assertEquals("├──────────────┬──────────┬──────────────┬──────────┬──────────────────────────┤", lines[1]);
+        assertEquals(80, Theme.width(lines[1]));
+
+        // Header row
+        assertEquals("│ TIMESTAMP    │ ACTOR    │ ACTION       │ TARGET   │ DETAILS                  │", lines[2]);
+        assertEquals(80, Theme.width(lines[2]));
+
+        // Mid table divider
+        assertEquals("├──────────────┼──────────┼──────────────┼──────────┼──────────────────────────┤", lines[3]);
+        assertEquals(80, Theme.width(lines[3]));
+
+        // Exactly 8 data rows (lines 4 to 11)
+        for (int r = 4; r <= 11; r++) {
+            String row = lines[r];
+            assertEquals(80, Theme.width(row), "Row " + r + " width must be 80: " + row);
+            assertTrue(row.startsWith("│"), "Row " + r + " must start with │");
+            assertTrue(row.endsWith("│"), "Row " + r + " must end with │");
+            // No emojis in data rows!
+            assertFalse(row.contains("🔐"), "No emojis in row " + r);
+            assertFalse(row.contains("🔑"), "No emojis in row " + r);
+            assertFalse(row.contains("✓"), "No emojis in row " + r);
+            assertFalse(row.contains("❌"), "No emojis in row " + r);
+            assertFalse(row.contains("⚠️"), "No emojis in row " + r);
+        }
+
+        // Row 4 is the first row and selected (sel = 0), so it should start with "> "
+        assertTrue(lines[4].contains("> "), "Selected row must contain cursor '> ': " + lines[4]);
+
+        // Bottom table divider
+        assertEquals("├──────────────┴──────────┴──────────────┴──────────┴──────────────────────────┤", lines[12]);
+        assertEquals(80, Theme.width(lines[12]));
+
+        // Pagination row
+        String pagination = lines[13];
+        assertEquals(80, Theme.width(pagination));
+        assertTrue(pagination.contains("Showing 1-8 of 10"), "Pagination left mismatch: " + pagination);
+        assertTrue(pagination.contains("[←/→] Page 1 of 2"), "Pagination right mismatch: " + pagination);
+
+        // Bottom card border
+        assertEquals("└" + "─".repeat(78) + "┘", lines[14]);
+        assertEquals(80, Theme.width(lines[14]));
+
+        // Single-line footer (line 16)
+        String footerLine = lines[16];
+        assertTrue(footerLine.contains("[↑/↓] Row"), "Footer missing [↑/↓] Row: " + footerLine);
+        assertTrue(footerLine.contains("[Enter] View Details"), "Footer missing [Enter] View Details: " + footerLine);
+        assertTrue(footerLine.contains("[S] Search"), "Footer missing [S] Search: " + footerLine);
+        assertTrue(footerLine.contains("[R] Refresh"), "Footer missing [R] Refresh: " + footerLine);
+        assertTrue(footerLine.contains("[B] Back"), "Footer missing [B] Back: " + footerLine);
+    }
+
+    @Test
+    public void testAdminAuditEmptyRowsPadding() {
+        LifeForge tui = new LifeForge(AppContext.build());
+        tui.setLogs(buildSampleAuditLogs(3));
+        tui.setAuditPage(0);
+
+        String rendered = tui.renderAdminAuditPage(80);
+        assertNotNull(rendered);
+
+        String clean = rendered.replaceAll("\u001B\\[[;\\d]*m", "");
+        String[] lines = clean.split("\n", -1);
+
+        // Lines 4 to 6 are data rows
+        for (int r = 4; r <= 6; r++) {
+            assertEquals(80, Theme.width(lines[r]));
+            assertFalse(lines[r].equals("│              │          │              │          │                          │"));
+        }
+
+        // Lines 7 to 11 are empty padded rows
+        for (int r = 7; r <= 11; r++) {
+            assertEquals("│              │          │              │          │                          │", lines[r]);
+            assertEquals(80, Theme.width(lines[r]));
+        }
+
+        // Pagination row: 1-3 of 3, Page 1 of 1
+        String pagination = lines[13];
+        assertTrue(pagination.contains("Showing 1-3 of 3"), "Pagination mismatch: " + pagination);
+        assertTrue(pagination.contains("Page 1 of 1"), "Pagination mismatch: " + pagination);
+    }
+
+    @Test
+    public void testAdminAuditSearchFilterAndClear() {
+        LifeForge tui = new LifeForge(AppContext.build());
+        tui.setLogs(buildSampleAuditLogs(5));
+        tui.setAuditSearchQuery("LOGIN");
+
+        String rendered = tui.renderAdminAuditPage(80);
+        assertNotNull(rendered);
+
+        String clean = rendered.replaceAll("\u001B\\[[;\\d]*m", "");
+        String[] lines = clean.split("\n", -1);
+
+        // Line 1 should be the filter line
+        assertTrue(lines[1].contains("Filter: \"LOGIN\""), "Filter line mismatch: " + lines[1]);
+        assertTrue(lines[1].contains("(Showing 5 events)"), "Filter line mismatch: " + lines[1]);
+        assertEquals(80, Theme.width(lines[1]));
+
+        // Footer should include [C] Clear Search
+        String footerLine = lines[lines.length - 1];
+        assertTrue(footerLine.contains("[C] Clear Search"), "Footer should include Clear Search: " + footerLine);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testAdminAuditEnterNavigatesToDetail() throws Exception {
+        LifeForge tui = new LifeForge(AppContext.build());
+        List<AuditLog> sampleLogs = buildSampleAuditLogs(5);
+        tui.setLogs(sampleLogs);
+
+        Class<?> screenEnum = Class.forName("com.lifeforge.tui4j.LifeForge$Screen");
+        Field screenField = LifeForge.class.getDeclaredField("screen");
+        screenField.setAccessible(true);
+        Object adminAudit = Enum.valueOf((Class<Enum>) screenEnum, "ADMIN_AUDIT");
+        Object adminAuditDetail = Enum.valueOf((Class<Enum>) screenEnum, "ADMIN_AUDIT_DETAIL");
+        screenField.set(tui, adminAudit);
+
+        Field selField = LifeForge.class.getDeclaredField("sel");
+        selField.setAccessible(true);
+        selField.set(tui, 0);
+
+        // Press Enter (keyCR)
+        tui.update(new KeyPressMessage(new Key(KeyType.keyCR)));
+
+        // Screen should now be ADMIN_AUDIT_DETAIL
+        assertEquals(adminAuditDetail, screenField.get(tui));
+        assertNotNull(tui.getSelAudit());
+        assertEquals(1L, tui.getSelAudit().getId());
     }
 }

@@ -42,10 +42,6 @@ public final class LifeForge implements Model {
         REGISTER,
         FORGOT_PASSWORD,
         VERIFY_CODE,
-        NEW_PASSWORD,
-        RESET_STATUS,
-        RESET_APPROVED,
-        RESET_SUCCESS,
         USER_HOME,
         GOAL_SELECT,
         PERSONALIZED_ANALYSIS,
@@ -83,9 +79,6 @@ public final class LifeForge implements Model {
         ADMIN_AUDIT_DETAIL,
         ADMIN_AUDIT_SEARCH,
         ADMIN_REC_SEARCH,
-        ADMIN_RESET_REQUESTS,
-        ADMIN_RESET_DETAIL,
-        ADMIN_RESET_CONFIRM,
         ADMIN_SETTINGS
     }
 
@@ -102,6 +95,7 @@ public final class LifeForge implements Model {
     // rendered frame horizontally and vertically.
     private static final int TARGET_FRAME_WIDTH = 80;
     private static final int MIN_FRAME_WIDTH = 40;
+    private static final int ADMIN_USERS_PAGE_SIZE = 4;
     private int termWidth = 80;
     private int termHeight = 24;
 
@@ -126,9 +120,6 @@ public final class LifeForge implements Model {
 
     // navigation payloads
     private Long resetUserId;
-    private boolean codeVerified;
-    private String resetStatusKind;
-    private boolean resetApproveReject;
     private RecommendationCategory currentCategory;
     private RecommendationService.RecommendationResult result;
     private PersonalizedAnalysisResult analysisResult;
@@ -160,6 +151,8 @@ public final class LifeForge implements Model {
     private String recSearchQueryText = "";
     private List<Recommendation> recSearchResults;
     private boolean recSearchResultsMode;
+    private final Set<Long> inactiveRecIds = new HashSet<>();
+    private final Set<Long> inactiveCatIds = new HashSet<>();
 
     // cached lists
     private final List<String> menuLabels = new ArrayList<>();
@@ -172,7 +165,7 @@ public final class LifeForge implements Model {
     private List<AuditLog> logs;
     private List<AuditLog> allAuditLogs = new ArrayList<>();
     private int auditPage;
-    private final int auditPageSize = 6;
+    private final int auditPageSize = 8;
     private String auditSearchQuery = "";
     private AuditLog selAudit;
     private final Map<Long, User> auditUserCache = new HashMap<>();
@@ -181,16 +174,12 @@ public final class LifeForge implements Model {
     private int userPage;
     private final int userPageSize = 8;
 
-    // password reset request management (admin approval workflow)
-    private List<com.lifeforge.model.PasswordReset> resetList = new ArrayList<>();
-    private int resetPage;
-    private final int resetPageSize = 8;
-    private com.lifeforge.model.PasswordReset selReset;
-    private Map<Long, String[]> resetUserLabels = new HashMap<>();
     private static final java.time.format.DateTimeFormatter AUDIT_TIME_FMT =
             java.time.format.DateTimeFormatter.ofPattern("MM/dd HH:mm");
-    private static final java.time.format.DateTimeFormatter RESET_DETAIL_TIME_FMT =
-            java.time.format.DateTimeFormatter.ofPattern("MM/dd/yyyy HH:mm");
+    private static final java.time.format.DateTimeFormatter SAVED_TIME_FMT =
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+    private static final java.time.format.DateTimeFormatter MEMBER_DATE_FMT =
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final int AUDIT_TIME_W = 11;
     private static final int AUDIT_ADMIN_W = 8;
     private static final int AUDIT_ACTION_W = 17;
@@ -200,6 +189,14 @@ public final class LifeForge implements Model {
     private String recommendationSearchQuery = "";
     private List<Recommendation> displayedRecs;
     private boolean dbOk;
+
+    public boolean isDbOk() {
+        return dbOk;
+    }
+
+    public void setDbOk(boolean dbOk) {
+        this.dbOk = dbOk;
+    }
 
     public LifeForge(AppContext ctx) {
         this.ctx = ctx;
@@ -239,18 +236,70 @@ public final class LifeForge implements Model {
 
     @Override
     public String view() {
+        if (screen == Screen.ADMIN_USERS) {
+            int adminWidth = Math.max(MIN_FRAME_WIDTH, Math.min(120, termWidth));
+            String page = renderAdminUsersPage(adminWidth);
+            return centerFrame(page, adminWidth);
+        }
+        if (screen == Screen.ADMIN_RECS) {
+            int adminWidth = Math.min(TARGET_FRAME_WIDTH, termWidth);
+            String page = renderAdminRecsPage(adminWidth);
+            return centerFrame(page, adminWidth);
+        }
+        if (screen == Screen.ADMIN_REC_DETAIL) {
+            int adminWidth = Math.min(TARGET_FRAME_WIDTH, termWidth);
+            String page = renderAdminRecDetailPage(adminWidth);
+            return centerFrame(page, adminWidth);
+        }
+        if (screen == Screen.ADMIN_GOALS) {
+            int adminWidth = Math.min(TARGET_FRAME_WIDTH, termWidth);
+            String page = renderAdminGoalsPage(adminWidth);
+            return centerFrame(page, adminWidth);
+        }
+        if (screen == Screen.ADMIN_CATS) {
+            int adminWidth = Math.min(TARGET_FRAME_WIDTH, termWidth);
+            String page = renderAdminCatsPage(adminWidth);
+            return centerFrame(page, adminWidth);
+        }
+        if (screen == Screen.ADMIN_ANALYTICS) {
+            int adminWidth = Math.min(TARGET_FRAME_WIDTH, termWidth);
+            String page = renderAdminAnalyticsPage(adminWidth);
+            return centerFrame(page, adminWidth);
+        }
+        if (screen == Screen.ADMIN_AUDIT) {
+            int adminWidth = Math.min(TARGET_FRAME_WIDTH, termWidth);
+            String page = renderAdminAuditPage(adminWidth);
+            return centerFrame(page, adminWidth);
+        }
+        if (screen == Screen.ADMIN_SETTINGS) {
+            int adminWidth = Math.min(TARGET_FRAME_WIDTH, termWidth);
+            String page = renderAdminSettingsPage(adminWidth);
+            return centerFrame(page, adminWidth);
+        }
+        if (screen == Screen.FORGOT_PASSWORD) {
+            int cardWidth = Math.min(TARGET_FRAME_WIDTH, termWidth);
+            String page = renderForgotPasswordPage(cardWidth);
+            return centerFrame(page, cardWidth);
+        }
+        if (screen == Screen.VERIFY_CODE) {
+            int cardWidth = Math.min(TARGET_FRAME_WIDTH, termWidth);
+            String page = renderVerifyResetPage(cardWidth);
+            return centerFrame(page, cardWidth);
+        }
+
+        int frameWidth = (screen == Screen.RECOMMEND_DETAIL)
+                ? Math.max(MIN_FRAME_WIDTH, Math.min(96, termWidth))
+                : Math.min(TARGET_FRAME_WIDTH, termWidth);
+        this.width = frameWidth;
+
         List<Line> body = new ArrayList<>();
         String subtitle = "";
         switch (screen) {
             case WELCOME -> subtitle = viewWelcome(body);
             case LOGIN -> subtitle = viewLogin(body);
             case REGISTER -> subtitle = viewRegister(body);
-            case FORGOT_PASSWORD -> subtitle = viewForgotPassword(body);
-            case VERIFY_CODE -> subtitle = viewVerifyCode(body);
-            case NEW_PASSWORD -> subtitle = viewNewPassword(body);
-            case RESET_STATUS -> subtitle = viewResetStatus(body);
-            case RESET_APPROVED -> subtitle = viewResetApproved(body);
-            case RESET_SUCCESS -> subtitle = viewResetSuccess(body);
+            case FORGOT_PASSWORD -> subtitle = "";
+            case VERIFY_CODE -> subtitle = "";
             case USER_HOME -> subtitle = viewUserHome(body);
             case GOAL_SELECT -> subtitle = viewGoalSelect(body);
             case PERSONALIZED_ANALYSIS -> subtitle = viewPersonalizedAnalysis(body);
@@ -286,14 +335,8 @@ public final class LifeForge implements Model {
             case ADMIN_AUDIT -> subtitle = viewAdminAudit(body);
             case ADMIN_AUDIT_DETAIL -> subtitle = viewAdminAuditDetail(body);
             case ADMIN_AUDIT_SEARCH -> subtitle = viewAdminAuditSearch(body);
-            case ADMIN_RESET_REQUESTS -> subtitle = viewAdminResetRequests(body);
-            case ADMIN_RESET_DETAIL -> subtitle = viewAdminResetDetail(body);
-            case ADMIN_RESET_CONFIRM -> subtitle = viewAdminResetConfirm(body);
             case ADMIN_SETTINGS -> subtitle = viewAdminSettings(body);
         }
-        // Build the page so ScreenKit's actual outer frame uses the target width (min(80, termWidth)).
-        // This keeps every screen inside one continuous square border.
-        int frameWidth = Math.min(TARGET_FRAME_WIDTH, termWidth);
         String page = ScreenKit.page(title(), subtitle, body, status, statusErr, footer(), frameWidth);
         return centerFrame(page, frameWidth);
     }
@@ -306,6 +349,14 @@ public final class LifeForge implements Model {
      * the right side of the frame with an ellipsis.
      */
     private String centerFrame(String page, int frameWidth) {
+        boolean clearScreen = false;
+        if (page.startsWith("\u001B[H\u001B[2J")) {
+            clearScreen = true;
+            page = page.substring("\u001B[H\u001B[2J".length());
+            if (page.startsWith("\n")) {
+                page = page.substring(1);
+            }
+        }
         String[] lines = page.split("\n", -1);
 
         int leftPad = Math.max(0, (termWidth - frameWidth) / 2);
@@ -319,6 +370,9 @@ public final class LifeForge implements Model {
         int topPad = Math.max(0, (termHeight - lines.length) / 2);
 
         StringBuilder out = new StringBuilder();
+        if (clearScreen) {
+            out.append("\u001B[H\u001B[2J");
+        }
         for (int i = 0; i < topPad; i++) {
             out.append('\n');
         }
@@ -404,12 +458,8 @@ public final class LifeForge implements Model {
             case WELCOME -> "Welcome";
             case LOGIN -> "Login";
             case REGISTER -> "Register Account";
-            case FORGOT_PASSWORD -> "Reset Password";
-            case VERIFY_CODE -> "Verify Account";
-            case NEW_PASSWORD -> "New Password";
-            case RESET_STATUS -> "Password Reset Status";
-            case RESET_APPROVED -> "Request Approved";
-            case RESET_SUCCESS -> "Password Reset";
+            case FORGOT_PASSWORD -> "Account Recovery";
+            case VERIFY_CODE -> "Password Reset";
             case USER_HOME -> "Dashboard";
             case GOAL_SELECT -> "Choose Your Goal";
             case PERSONALIZED_ANALYSIS -> "PERSONALIZED ANALYSIS";
@@ -430,7 +480,7 @@ public final class LifeForge implements Model {
             case PROFILE_EDIT -> "Edit Profile";
             case PROFILE_PASSWORD -> "Change Password";
             case ADMIN_HOME -> "Admin Dashboard";
-            case ADMIN_USERS -> "User Management";
+            case ADMIN_USERS -> "ADMIN - USER MANAGEMENT";
             case ADMIN_USER_ACTIONS -> "User Details";
             case ADMIN_SEARCH -> "Search Users";
             case ADMIN_RECS -> "Recommendation CMS";
@@ -446,10 +496,6 @@ public final class LifeForge implements Model {
             case ADMIN_AUDIT -> "Audit Logs";
             case ADMIN_AUDIT_DETAIL -> "Audit Log Details";
             case ADMIN_AUDIT_SEARCH -> "Search Audit Logs";
-            case ADMIN_RESET_REQUESTS -> "Password Reset Requests";
-            case ADMIN_RESET_DETAIL -> "Reset Request Details";
-            case ADMIN_RESET_CONFIRM -> resetApproveReject ? "Approve Request"
-                    : "Reject Request";
             case ADMIN_SETTINGS -> "System Settings";
         };
     }
@@ -460,8 +506,12 @@ public final class LifeForge implements Model {
     /** Navigate pushing the current screen. pendingStatus survives to the next refresh. */
     private void goTo(Screen target) {
         status = "";
+        Screen prev = screen;
         back.push(screen);
         screen = target;
+        if (target == Screen.ADMIN_RECS && !isRecScreen(prev)) {
+            resetAdminRecSearch();
+        }
         refresh();
     }
 
@@ -469,23 +519,32 @@ public final class LifeForge implements Model {
         status = "";
         back.clear();
         screen = target;
+        if (target == Screen.ADMIN_RECS) {
+            resetAdminRecSearch();
+        }
         refresh();
     }
 
     private void goBack() {
         status = "";
-        if (screen == Screen.RESET_SUCCESS) {
-            // After a successful reset, don't return into the completed flow.
-            goClean(Screen.LOGIN);
-            return;
+        if (screen == Screen.AI_CHAT) {
+            ctx.recommendationController.resetAiConversation();
+        }
+        if (screen == Screen.ADMIN_RECS) {
+            resetAdminRecSearch();
         }
         if (!back.isEmpty()) {
-            screen = back.pop();
+            Screen popped = back.pop();
+            if (popped == Screen.ADMIN_RECS && !isRecScreen(screen)) {
+                resetAdminRecSearch();
+            }
+            screen = popped;
         }
         refresh();
     }
 
     private void home() {
+        resetAdminRecSearch();
         if (!ctx.session.isLoggedIn()) {
             goClean(Screen.WELCOME);
         } else if (ctx.authController.isAdmin()) {
@@ -517,7 +576,6 @@ public final class LifeForge implements Model {
             case ADMIN_CATS -> refreshAdminCats();
             case ADMIN_ANALYTICS -> refreshAnalytics();
             case ADMIN_AUDIT -> refreshLogs();
-            case ADMIN_RESET_REQUESTS -> refreshAdminResets();
             case ADMIN_SETTINGS -> refreshSettings();
             case LOGIN -> buildForm(new String[] { "Email or Username", "Password", "Forgot Password", "Login", "Back" },
                     new FieldKind[] { FieldKind.TEXT, FieldKind.SECRET, FieldKind.BUTTON_SECONDARY,
@@ -573,26 +631,17 @@ public final class LifeForge implements Model {
                 }
             }
             case FORGOT_PASSWORD -> buildForm(
-                    new String[] { "Email", "Continue", "Back" },
-                    new FieldKind[] { FieldKind.TEXT, FieldKind.BUTTON_PRIMARY,
-                            FieldKind.BUTTON_SECONDARY },
+                    new String[] { "Username or Email" },
+                    new FieldKind[] { FieldKind.TEXT },
+                    new String[][] { null },
+                    new long[][] { null },
+                    new String[] { "" });
+            case VERIFY_CODE -> buildForm(
+                    new String[] { "Verification Code", "New Password", "Confirm Password" },
+                    new FieldKind[] { FieldKind.CODE6, FieldKind.SECRET, FieldKind.SECRET },
                     new String[][] { null, null, null },
                     new long[][] { null, null, null },
                     new String[] { "", "", "" });
-            case VERIFY_CODE -> buildForm(
-                    new String[] { "Code (6 digits)", "Verify", "Resend Code", "Back" },
-                    new FieldKind[] { FieldKind.CODE6, FieldKind.BUTTON_PRIMARY,
-                            FieldKind.BUTTON_SECONDARY, FieldKind.BUTTON_SECONDARY },
-                    new String[][] { null, null, null, null },
-                    new long[][] { null, null, null, null },
-                    new String[] { "", "", "", "" });
-            case NEW_PASSWORD -> buildForm(
-                    new String[] { "New Password", "Confirm Password", "Reset Password", "Back" },
-                    new FieldKind[] { FieldKind.SECRET, FieldKind.SECRET,
-                            FieldKind.BUTTON_PRIMARY, FieldKind.BUTTON_SECONDARY },
-                    new String[][] { null, null, null, null },
-                    new long[][] { null, null, null, null },
-                    new String[] { "", "", "", "" });
             case ADMIN_GOAL_FORM -> buildAdminGoalForm();
             case ADMIN_CAT_FORM -> buildAdminCatForm();
         }
@@ -822,6 +871,7 @@ public final class LifeForge implements Model {
         chatDraft = "";
         chatCursor = 0;
         chatConversation.clear();
+        ctx.recommendationController.resetAiConversation();
         resetChatInsertTracking();
         goTo(Screen.AI_CHAT);
     }
@@ -840,12 +890,13 @@ public final class LifeForge implements Model {
         chatDraft = "";
         chatCursor = 0;
         chatConversation.clear();
+        ctx.recommendationController.resetAiConversation();
         resetChatInsertTracking();
         goTo(Screen.AI_CHAT);
     }
 
     private void handleAiChatKey(KeyType t, String typed) {
-        if (esc(t)) { goBack(); return; }
+        if (esc(t)) { ctx.recommendationController.resetAiConversation(); goBack(); return; }
         if (enter(t)) { sendAiChat(); return; }
         if (t == KeyType.keyETX) {
             chatDraft = ""; chatCursor = 0; status = "Question cleared."; statusErr = false;
@@ -879,12 +930,14 @@ public final class LifeForge implements Model {
                 }
                 switch (c) {
                     case 'p', 'P' -> {
+                        ctx.recommendationController.resetAiConversation();
                         if (hasGoal) {
                             goTo(Screen.PERSONALIZED_PLAN);
                         }
                         return;
                     }
                     case 'o', 'O' -> {
+                        ctx.recommendationController.resetAiConversation();
                         if (lastNavCategoryId != null && hasGoal) {
                             openRecommendationCategory(lastNavCategoryId);
                         } else if (hasGoal) {
@@ -892,9 +945,9 @@ public final class LifeForge implements Model {
                         }
                         return;
                     }
-                    case 'b', 'B' -> { goBack(); return; }
-                    case 'h', 'H' -> { goClean(Screen.USER_HOME); return; }
-                    case 'q', 'Q' -> { quitting = true; return; }
+                    case 'b', 'B' -> { ctx.recommendationController.resetAiConversation(); goBack(); return; }
+                    case 'h', 'H' -> { ctx.recommendationController.resetAiConversation(); goClean(Screen.USER_HOME); return; }
+                    case 'q', 'Q' -> { ctx.recommendationController.resetAiConversation(); quitting = true; return; }
                 }
             }
         }
@@ -1002,7 +1055,7 @@ public final class LifeForge implements Model {
 
         status = resp.fromAi
                 ? "AI response received. Official Rule Engine recommendations remain unchanged."
-                : "AI is offline. Showing official Rule Engine guidance.";
+                : "[AI Offline: Rule-based engine active. Check if Ollama is running on port 11434.]";
         statusErr = false;
     }
 
@@ -1033,23 +1086,6 @@ public final class LifeForge implements Model {
         }
     }
 
-    private void resendCode() {
-        var result = ctx.passwordResetController.resendCode(resetUserId);
-        if (!result.accepted) {
-            status = errText("Could not resend the code", ctx.passwordResetController.getLastError());
-            statusErr = true;
-        } else {
-            status = "A new verification code has been sent to your email.";
-            statusErr = false;
-            if (AppConfig.isDevResetCodeLoggingEnabled() && resetUserId != null) {
-                String dev = ctx.passwordResetController.devLastCode(resetUserId);
-                if (dev != null) {
-                    status += " (DEV code: " + dev + ")";
-                }
-            }
-        }
-    }
-
 
 
 
@@ -1063,6 +1099,35 @@ public final class LifeForge implements Model {
         KeyType t = msg.type();
         char[] runes = msg.runes();
         String s = runes == null ? "" : new String(runes);
+
+        if (screen == Screen.WELCOME) {
+            if (t == KeyType.KeyLeft || up(t)) {
+                sel = Math.max(0, sel - 1);
+                return;
+            }
+            if (t == KeyType.KeyRight || down(t)) {
+                sel = Math.min(2, sel + 1);
+                return;
+            }
+            if (enter(t)) {
+                switch (sel) {
+                    case 0 -> goTo(Screen.LOGIN);
+                    case 1 -> goTo(Screen.REGISTER);
+                    case 2 -> quitApp();
+                }
+                return;
+            }
+            if (t == KeyType.KeyRunes || t == KeyType.KeySpace) {
+                char c = s.isEmpty() ? ' ' : Character.toLowerCase(s.charAt(0));
+                switch (c) {
+                    case 'l' -> goTo(Screen.LOGIN);
+                    case 'r' -> goTo(Screen.REGISTER);
+                    case 'q' -> quitApp();
+                    default -> {}
+                }
+            }
+            return;
+        }
 
         // ==============================
         // FORM SCREENS
@@ -1211,6 +1276,18 @@ public final class LifeForge implements Model {
                 return;
             }
 
+            if (esc(t)) {
+                if (recommendationSearchQuery != null && !recommendationSearchQuery.isEmpty()) {
+                    resetAdminRecSearch();
+                    status = "Search filter cleared.";
+                    statusErr = false;
+                    return;
+                }
+                resetAdminRecSearch();
+                goBack();
+                return;
+            }
+
             // LETTER SHORTCUTS
             if (t == KeyType.KeyRunes || t == KeyType.KeySpace) {
 
@@ -1219,12 +1296,25 @@ public final class LifeForge implements Model {
                         : Character.toLowerCase(s.charAt(0));
 
                 switch (c) {
-                    case 'b' -> goBack();
-                    case 'h' -> home();
+                    case 'b' -> {
+                        resetAdminRecSearch();
+                        goBack();
+                    }
+                    case 'h' -> {
+                        resetAdminRecSearch();
+                        home();
+                    }
                     case 'q' -> quitApp();
                     case 'n' -> menuNew();
                     case 'd' -> menuDelete();
                     case 's' -> menuSearch();
+                    case 'c', 'x' -> {
+                        if (recommendationSearchQuery != null && !recommendationSearchQuery.isEmpty()) {
+                            resetAdminRecSearch();
+                            status = "Search filter cleared.";
+                            statusErr = false;
+                        }
+                    }
                     case 'r' -> menuRefresh();
                     default -> {
                         // Ignore
@@ -1239,6 +1329,10 @@ public final class LifeForge implements Model {
         // RECOMMENDATION DETAIL
         // ==============================
         if (screen == Screen.ADMIN_REC_DETAIL) {
+            if (esc(t)) {
+                goTo(Screen.ADMIN_RECS);
+                return;
+            }
             if (enter(t) || ePressed(t, s)) {
                 if (editRecId >= 0) {
                     goTo(Screen.ADMIN_REC_FORM);
@@ -1253,12 +1347,25 @@ public final class LifeForge implements Model {
                             goTo(Screen.ADMIN_REC_FORM);
                         }
                     }
+                    case 't' -> {
+                        if (editRecId >= 0) {
+                            if (inactiveRecIds.contains(editRecId)) {
+                                inactiveRecIds.remove(editRecId);
+                                status = "Recommendation #" + editRecId + " set to ACTIVE";
+                                statusErr = false;
+                            } else {
+                                inactiveRecIds.add(editRecId);
+                                status = "Recommendation #" + editRecId + " set to INACTIVE";
+                                statusErr = false;
+                            }
+                        }
+                    }
                     case 'd' -> {
                         if (editRecId >= 0) {
                             goTo(Screen.ADMIN_REC_DELETE_CONFIRM);
                         }
                     }
-                    case 'b' -> goBack();
+                    case 'b' -> goTo(Screen.ADMIN_RECS);
                     case 'h' -> home();
                     case 'q' -> quitApp();
                     default -> { /* ignore */ }
@@ -1291,14 +1398,15 @@ public final class LifeForge implements Model {
         // ADMIN USER MANAGEMENT TABLE
         // ==============================
         if (screen == Screen.ADMIN_USERS) {
+            int pageSize = ADMIN_USERS_PAGE_SIZE;
             int total = users == null ? 0 : users.size();
-            int pageStart = userPage * userPageSize;
-            int pageCount = Math.min(userPageSize, Math.max(0, total - pageStart));
+            int pageStart = userPage * pageSize;
+            int pageCount = Math.min(pageSize, Math.max(0, total - pageStart));
             int maxSel = Math.max(0, pageCount - 1);
             if (sel > maxSel) {
                 sel = maxSel;
             }
-            int pages = Math.max(1, (int) Math.ceil((double) total / userPageSize));
+            int pages = Math.max(1, (int) Math.ceil((double) total / pageSize));
 
             if (up(t)) {
                 if (pageCount > 0) {
@@ -1346,6 +1454,34 @@ public final class LifeForge implements Model {
             if (t == KeyType.KeyRunes || t == KeyType.KeySpace) {
                 char c = s.isEmpty() ? ' ' : Character.toLowerCase(s.charAt(0));
                 switch (c) {
+                    case 'u' -> {
+                        if (pageCount > 0) {
+                            sel = Math.max(0, sel - 1);
+                        }
+                    }
+                    case 'd' -> {
+                        if (pageCount > 0) {
+                            sel = Math.min(pageCount - 1, sel + 1);
+                        }
+                    }
+                    case 'l' -> {
+                        if (userPage > 0) {
+                            userPage--;
+                            sel = 0;
+                        }
+                    }
+                    case 'r' -> {
+                        if (userPage < pages - 1) {
+                            userPage++;
+                            sel = 0;
+                        }
+                    }
+                    case 'e', 'v' -> {
+                        if (total > 0 && sel >= 0 && sel < pageCount) {
+                            selUser = users.get(pageStart + sel);
+                            goTo(Screen.ADMIN_USER_ACTIONS);
+                        }
+                    }
                     case 's' -> goTo(Screen.ADMIN_SEARCH);
                     case 'x' -> {
                         searchQuery = "";
@@ -1417,9 +1553,14 @@ public final class LifeForge implements Model {
                 }
                 return;
             }
+            if (esc(t)) {
+                goBack();
+                return;
+            }
             if (t == KeyType.KeyRunes || t == KeyType.KeySpace) {
                 char c = s.isEmpty() ? ' ' : Character.toLowerCase(s.charAt(0));
                 switch (c) {
+                    case 't' -> toggleSelectedGoal();
                     case 'n' -> menuNew();
                     case 'd' -> menuDelete();
                     case 'b' -> goBack();
@@ -1488,9 +1629,14 @@ public final class LifeForge implements Model {
                 }
                 return;
             }
+            if (esc(t)) {
+                goBack();
+                return;
+            }
             if (t == KeyType.KeyRunes || t == KeyType.KeySpace) {
                 char c = s.isEmpty() ? ' ' : Character.toLowerCase(s.charAt(0));
                 switch (c) {
+                    case 't' -> toggleSelectedCat();
                     case 'n' -> menuNew();
                     case 'd' -> menuDelete();
                     case 'b' -> goBack();
@@ -1502,84 +1648,7 @@ public final class LifeForge implements Model {
             return;
         }
 
-        // ==============================
-        // PASSWORD RESET REQUESTS TABLE
-        // ==============================
-        if (screen == Screen.ADMIN_RESET_REQUESTS) {
-            int total = resetList == null ? 0 : resetList.size();
-            int pageStart = resetPage * resetPageSize;
-            int pageCount = Math.min(resetPageSize, Math.max(0, total - pageStart));
-            int maxSel = Math.max(0, pageCount - 1);
-            if (sel > maxSel) {
-                sel = maxSel;
-            }
-            int pages = Math.max(1, (int) Math.ceil((double) total / resetPageSize));
 
-            if (up(t)) {
-                if (pageCount > 0) {
-                    sel = Math.max(0, sel - 1);
-                }
-                return;
-            }
-            if (down(t)) {
-                if (pageCount > 0) {
-                    sel = Math.min(pageCount - 1, sel + 1);
-                }
-                return;
-            }
-            if (t == KeyType.KeyLeft) {
-                if (resetPage > 0) {
-                    resetPage--;
-                    sel = 0;
-                }
-                return;
-            }
-            if (t == KeyType.KeyRight) {
-                if (resetPage < pages - 1) {
-                    resetPage++;
-                    sel = 0;
-                }
-                return;
-            }
-            if (t == KeyType.KeyHome) {
-                resetPage = 0;
-                sel = 0;
-                return;
-            }
-            if (t == KeyType.KeyEnd) {
-                resetPage = pages - 1;
-                sel = Math.max(0, pageCount - 1);
-                return;
-            }
-            if (enter(t)) {
-                if (total > 0 && sel >= 0 && sel < pageCount) {
-                    selReset = resetList.get(pageStart + sel);
-                    goTo(Screen.ADMIN_RESET_DETAIL);
-                }
-                return;
-            }
-            if (t == KeyType.KeyRunes || t == KeyType.KeySpace) {
-                char c = s.isEmpty() ? ' ' : Character.toLowerCase(s.charAt(0));
-                switch (c) {
-                    case 'a' -> offerResetDecision(true);
-                    case 'r' -> offerResetDecision(false);
-                    case 'f' -> {
-                        refreshAdminResets();
-                        status = "Password reset requests refreshed.";
-                        statusErr = false;
-                    }
-                    case 'b' -> goBack();
-                    case 'h' -> home();
-                    case 'q' -> quitApp();
-                    default -> { /* ignore */ }
-                }
-            }
-            return;
-        }
-
-        // ==============================
-        // RESET REQUEST DETAIL uses the standard menu (Approve/Reject/Back).
-        // ==============================
 
         // ==============================
         // AUDIT LOG LIST
@@ -1637,6 +1706,13 @@ public final class LifeForge implements Model {
             }
 
             if (enter(t)) {
+                if (logs != null && !logs.isEmpty()) {
+                    int globalIdx = auditPage * auditPageSize + sel;
+                    if (globalIdx >= 0 && globalIdx < logs.size()) {
+                        selAudit = logs.get(globalIdx);
+                        goTo(Screen.ADMIN_AUDIT_DETAIL);
+                    }
+                }
                 return;
             }
 
@@ -1644,6 +1720,12 @@ public final class LifeForge implements Model {
                 char c = s.isEmpty() ? ' ' : Character.toLowerCase(s.charAt(0));
                 switch (c) {
                     case 's' -> goTo(Screen.ADMIN_AUDIT_SEARCH);
+                    case 'c' -> {
+                        if (auditSearchQuery != null && !auditSearchQuery.isEmpty()) {
+                            auditSearchQuery = "";
+                            refreshLogs();
+                        }
+                    }
                     case 'r' -> refreshLogs();
                     case 'b' -> goBack();
                     case 'h' -> home();
@@ -1665,6 +1747,36 @@ public final class LifeForge implements Model {
             if (t == KeyType.KeyRunes || t == KeyType.KeySpace) {
                 char c = s.isEmpty() ? ' ' : Character.toLowerCase(s.charAt(0));
                 switch (c) {
+                    case 'b' -> goBack();
+                    case 'h' -> home();
+                    case 'q' -> quitApp();
+                    default -> { /* ignore */ }
+                }
+            }
+            return;
+        }
+
+        // ==============================
+        // ADMIN SETTINGS
+        // ==============================
+        if (screen == Screen.ADMIN_SETTINGS) {
+            if (esc(t)) {
+                goBack();
+                return;
+            }
+            if (t == KeyType.KeyRunes || t == KeyType.KeySpace) {
+                char c = s.isEmpty() ? ' ' : Character.toLowerCase(s.charAt(0));
+                switch (c) {
+                    case 'r' -> {
+                        refreshSettings();
+                        if (dbOk) {
+                            status = "Connections tested: Database reachable, AI configuration active.";
+                            statusErr = false;
+                        } else {
+                            status = "Connections tested: Database unreachable.";
+                            statusErr = true;
+                        }
+                    }
                     case 'b' -> goBack();
                     case 'h' -> home();
                     case 'q' -> quitApp();
@@ -1766,6 +1878,70 @@ public final class LifeForge implements Model {
         }
 
         // ==============================
+        // PROFILE SCREEN
+        // ==============================
+        if (screen == Screen.PROFILE) {
+            if (esc(t)) {
+                if (armed) {
+                    armed = false;
+                    status = null;
+                    statusErr = false;
+                    return;
+                }
+                goBack();
+                return;
+            }
+            if (enter(t)) {
+                if (armed) {
+                    deleteAccount();
+                }
+                return;
+            }
+            if (t == KeyType.KeyRunes || t == KeyType.KeySpace) {
+                char c = s.isEmpty() ? ' ' : Character.toLowerCase(s.charAt(0));
+                switch (c) {
+                    case 'e' -> {
+                        armed = false;
+                        status = null;
+                        statusErr = false;
+                        goTo(Screen.PROFILE_EDIT);
+                    }
+                    case 'p' -> {
+                        armed = false;
+                        status = null;
+                        statusErr = false;
+                        goTo(Screen.PROFILE_PASSWORD);
+                    }
+                    case 'd' -> {
+                        if (armed) {
+                            deleteAccount();
+                        } else {
+                            armDelete();
+                        }
+                    }
+                    case 'b' -> {
+                        if (armed) {
+                            armed = false;
+                            status = null;
+                            statusErr = false;
+                            return;
+                        }
+                        goBack();
+                    }
+                    case 'h' -> {
+                        armed = false;
+                        status = null;
+                        statusErr = false;
+                        home();
+                    }
+                    case 'q' -> quitApp();
+                    default -> { /* ignore */ }
+                }
+            }
+            return;
+        }
+
+        // ==============================
         // RECOMMENDATION DETAIL (PAGINATED ONLY FOR MASTER ROUTINE)
         // ==============================
         if (screen == Screen.RECOMMEND_DETAIL) {
@@ -1780,6 +1956,15 @@ public final class LifeForge implements Model {
                     if (recommendDetailPage < 1) {
                         recommendDetailPage++;
                     }
+                    return;
+                }
+            } else {
+                if (t == KeyType.KeyLeft) {
+                    sel = sel <= 0 ? 0 : sel - 1;
+                    return;
+                }
+                if (t == KeyType.KeyRight) {
+                    sel = menuActions.isEmpty() ? 0 : Math.min(menuActions.size() - 1, sel + 1);
                     return;
                 }
             }
@@ -1966,7 +2151,6 @@ public final class LifeForge implements Model {
                 // "Forgot Password" button is at field index 2
                 if (fFocus == 2) {
                     resetUserId = null;
-                    codeVerified = false;
                     goTo(Screen.FORGOT_PASSWORD);
                 } else {
                     goBack();
@@ -1974,18 +2158,10 @@ public final class LifeForge implements Model {
             }
             case REGISTER -> goBack();
             case PROFILE_EDIT, PROFILE_PASSWORD -> goBack();
-            case FORGOT_PASSWORD -> goBack();
-            case VERIFY_CODE -> {
-                if (fFocus == 2) {
-                    // Resend Code button
-                    resendCode();
-                } else {
-                    // Back button
-                    resetUserId = null;
-                    goBack();
-                }
+            case FORGOT_PASSWORD, VERIFY_CODE -> {
+                resetUserId = null;
+                goTo(Screen.LOGIN);
             }
-            case NEW_PASSWORD -> goBack();
             case ADMIN_REC_FORM -> goTo(Screen.ADMIN_RECS);
             case ADMIN_GOAL_FORM -> goTo(Screen.ADMIN_GOALS);
             case ADMIN_CAT_FORM -> goTo(Screen.ADMIN_CATS);
@@ -1995,10 +2171,12 @@ public final class LifeForge implements Model {
                 if (fFocus == 2) {
                     recSearchQueryText = "";
                     fValues[0] = "";
+                    resetAdminRecSearch();
                     status = "Search query cleared. Type a new query below.";
                     statusErr = false;
                 } else {
-                    goBack();
+                    resetAdminRecSearch();
+                    goTo(Screen.ADMIN_RECS);
                 }
             }
             default -> goBack();
@@ -2025,6 +2203,18 @@ public final class LifeForge implements Model {
             return;
         }
         if (enter(t)) {
+            if (screen == Screen.FORGOT_PASSWORD) {
+                submitForm();
+                return;
+            }
+            if (screen == Screen.VERIFY_CODE) {
+                if (fFocus < fLabels.length - 1) {
+                    fFocus++;
+                } else {
+                    submitForm();
+                }
+                return;
+            }
             if (onButton) {
                 if (focusKind == FieldKind.BUTTON_PRIMARY) {
                     submitForm();
@@ -2096,6 +2286,22 @@ public final class LifeForge implements Model {
         }
         if (t == KeyType.KeyRunes || t == KeyType.KeySpace) {
             String text = s.isEmpty() ? " " : s;
+            if (screen == Screen.VERIFY_CODE) {
+                if (text.equalsIgnoreCase("r") && fFocus == 0) {
+                    resendCode();
+                    return;
+                }
+                if (text.equalsIgnoreCase("b") && fFocus == 0 && fValues[0].isEmpty()) {
+                    onFormCancel();
+                    return;
+                }
+            }
+            if (screen == Screen.FORGOT_PASSWORD) {
+                if (text.equalsIgnoreCase("b") && fValues[0].isEmpty()) {
+                    onFormCancel();
+                    return;
+                }
+            }
             if (isChoice(fKinds()[fFocus])) {
                 return;
             }
@@ -2125,13 +2331,8 @@ public final class LifeForge implements Model {
             case LOGIN -> setKinds(kinds, FieldKind.TEXT, FieldKind.SECRET,
                     FieldKind.BUTTON_SECONDARY, FieldKind.BUTTON_PRIMARY,
                     FieldKind.BUTTON_SECONDARY);
-            case FORGOT_PASSWORD -> setKinds(kinds, FieldKind.TEXT,
-                    FieldKind.BUTTON_PRIMARY, FieldKind.BUTTON_SECONDARY);
-            case VERIFY_CODE -> setKinds(kinds, FieldKind.CODE6,
-                    FieldKind.BUTTON_PRIMARY, FieldKind.BUTTON_SECONDARY,
-                    FieldKind.BUTTON_SECONDARY);
-            case NEW_PASSWORD -> setKinds(kinds, FieldKind.SECRET, FieldKind.SECRET,
-                    FieldKind.BUTTON_PRIMARY, FieldKind.BUTTON_SECONDARY);
+            case FORGOT_PASSWORD -> setKinds(kinds, FieldKind.TEXT);
+            case VERIFY_CODE -> setKinds(kinds, FieldKind.CODE6, FieldKind.SECRET, FieldKind.SECRET);
             case REGISTER -> setKinds(kinds, FieldKind.TEXT, FieldKind.TEXT, FieldKind.SECRET,
                     FieldKind.SECRET, FieldKind.NUMERIC, FieldKind.GENDER, FieldKind.NUMERIC,
                     FieldKind.NUMERIC, FieldKind.ACTIVITY, FieldKind.BUTTON_PRIMARY,
@@ -2374,8 +2575,7 @@ public final class LifeForge implements Model {
             case LOGIN -> submitLogin();
             case REGISTER -> submitRegister();
             case FORGOT_PASSWORD -> submitForgotPassword();
-            case VERIFY_CODE -> submitVerifyCode();
-            case NEW_PASSWORD -> submitNewPassword();
+            case VERIFY_CODE -> submitVerifyAndReset();
             case PROFILE_EDIT -> submitProfileEdit();
             case PROFILE_PASSWORD -> submitProfilePassword();
             case ADMIN_SEARCH -> submitSearch();
@@ -2389,22 +2589,23 @@ public final class LifeForge implements Model {
     }
 
     private void submitRecommendationSearch() {
-        String query = fValues[0].trim();
+        String query = fValues == null || fValues.length == 0 || fValues[0] == null
+                ? "" : fValues[0].trim();
         if (query.isEmpty()) {
-            status = "Enter a search query first.";
-            statusErr = true;
+            resetAdminRecSearch();
+            status = "Search filter cleared.";
+            statusErr = false;
+            goTo(Screen.ADMIN_RECS);
             return;
         }
-        recSearchQueryText = query;
         recommendationSearchQuery = query;
-        if (recomms == null || recomms.isEmpty()) {
-            recomms = safe(ctx.recommendationController.listAllRecommendations());
-        }
-        recSearchResults = filterRecommendations(query);
-        recSearchResultsMode = true;
+        recSearchQueryText = query;
+        recPage = 0;
         sel = 0;
+        refreshAdminRecs();
         status = "";
         statusErr = false;
+        goTo(Screen.ADMIN_RECS);
     }
 
     private void submitLogin() {
@@ -2421,6 +2622,7 @@ public final class LifeForge implements Model {
             return;
         }
         chatConversation.clear();
+        ctx.recommendationController.resetAiConversation();
         lastNavCategoryId = null;
         lastNavCategoryName = null;
         if (ctx.authController.isAdmin()) {
@@ -2446,6 +2648,7 @@ public final class LifeForge implements Model {
                 ActivityLevel.values()[choice(fValues[8], 2)]);
         if (ok) {
             chatConversation.clear();
+            ctx.recommendationController.resetAiConversation();
             lastNavCategoryId = null;
             lastNavCategoryName = null;
             pendingStatus = "Account created. Welcome to " + AppConfig.APP_NAME + "!";
@@ -2460,14 +2663,13 @@ public final class LifeForge implements Model {
     // Forgot Password / Password Reset flow
     // ------------------------------------------------------------------
     private void submitForgotPassword() {
-        String email = fValues[0].trim();
-        String emailCheck = com.lifeforge.util.ValidationUtil.validateEmail(email);
-        if (emailCheck != null) {
-            status = emailCheck;
+        String input = (fValues != null && fValues.length > 0 && fValues[0] != null) ? fValues[0].trim() : "";
+        if (input.isEmpty()) {
+            status = "Please enter your username or registered email.";
             statusErr = true;
             return;
         }
-        var result = ctx.passwordResetController.startReset(email);
+        var result = ctx.passwordResetController.startReset(input);
         if (!result.accepted) {
             status = result.message;
             statusErr = true;
@@ -2476,49 +2678,24 @@ public final class LifeForge implements Model {
         resetUserId = result.userId;
         status = result.message;
         statusErr = false;
-        if (resetUserId != null
-                && com.lifeforge.service.PasswordResetService.STATUS_APPROVED.equals(result.status)) {
-            resetStatusKind = "approved";
-            goTo(Screen.RESET_APPROVED);
-            return;
-        }
-        if (resetUserId != null && result.status != null) {
-            resetStatusKind = result.status.toLowerCase(Locale.ROOT);
-            goTo(Screen.RESET_STATUS);
-            return;
-        }
-        resetStatusKind = "unknown";
-        goTo(Screen.RESET_STATUS);
+        goTo(Screen.VERIFY_CODE);
     }
 
-    private void submitVerifyCode() {
-        String code = fValues[0].trim();
+    private void submitVerifyAndReset() {
+        if (resetUserId == null) {
+            status = "Your reset session has expired. Please request a new code.";
+            statusErr = true;
+            return;
+        }
+        String code = (fValues != null && fValues.length > 0 && fValues[0] != null) ? fValues[0].trim() : "";
+        String newPass = (fValues != null && fValues.length > 1 && fValues[1] != null) ? fValues[1] : "";
+        String confirmPass = (fValues != null && fValues.length > 2 && fValues[2] != null) ? fValues[2] : "";
+
         if (code.length() != 6 || !code.chars().allMatch(Character::isDigit)) {
             status = "The verification code must be exactly 6 digits.";
             statusErr = true;
             return;
         }
-        boolean ok = ctx.passwordResetController.verifyCode(resetUserId, code);
-        if (ok) {
-            codeVerified = true;
-            pendingStatus = "Identity verified. Create your new password.";
-            status = "";
-            statusErr = false;
-            goTo(Screen.NEW_PASSWORD);
-        } else {
-            status = errText("Verification failed", ctx.passwordResetController.getLastError());
-            statusErr = true;
-        }
-    }
-
-    private void submitNewPassword() {
-        if (!codeVerified || resetUserId == null) {
-            status = "Your verification has expired. Please start over.";
-            statusErr = true;
-            return;
-        }
-        String newPass = fValues[0];
-        String confirmPass = fValues[1];
         if (newPass.isEmpty() || confirmPass.isEmpty()) {
             status = "Both password fields are required.";
             statusErr = true;
@@ -2534,16 +2711,35 @@ public final class LifeForge implements Model {
             statusErr = true;
             return;
         }
-        boolean ok = ctx.passwordResetController.resetPassword(resetUserId, newPass, confirmPass);
+        boolean ok = ctx.passwordResetController.resetPassword(resetUserId, code, newPass, confirmPass);
         if (ok) {
             resetUserId = null;
-            codeVerified = false;
             pendingStatus = "Password reset successfully! Login with your new password.";
             status = "";
             statusErr = false;
-            goTo(Screen.RESET_SUCCESS);
+            goTo(Screen.LOGIN);
         } else {
             status = errText("Reset failed", ctx.passwordResetController.getLastError());
+            statusErr = true;
+        }
+    }
+
+    private void resendCode() {
+        if (resetUserId == null) {
+            status = "No active reset session. Please request a new code.";
+            statusErr = true;
+            return;
+        }
+        var result = ctx.passwordResetController.resendCode(resetUserId);
+        if (result.accepted) {
+            status = "New verification code sent (valid for 5 minutes).";
+            statusErr = false;
+            if (fValues != null && fValues.length > 0) {
+                fValues[0] = "";
+                fCursor[0] = 0;
+            }
+        } else {
+            status = result.message;
             statusErr = true;
         }
     }
@@ -2715,33 +2911,6 @@ public final class LifeForge implements Model {
                 menuLabels.add("Quit");
                 menuActions.add(this::quitApp);
             }
-            case RESET_SUCCESS -> {
-                menuLabels.add("Login");
-                menuActions.add(() -> {
-                    resetUserId = null;
-                    codeVerified = false;
-                    goClean(Screen.LOGIN);
-                });
-                menuLabels.add("Quit");
-                menuActions.add(this::quitApp);
-            }
-            case RESET_STATUS -> {
-                menuLabels.add("Back");
-                menuActions.add(this::goBack);
-            }
-            case RESET_APPROVED -> {
-                menuLabels.add("Continue");
-                menuActions.add(() -> {
-                    resetStatusKind = "approved";
-                    codeVerified = true;
-                    pendingStatus = "Your request has been approved. Create your new password.";
-                    status = "";
-                    statusErr = false;
-                    goTo(Screen.NEW_PASSWORD);
-                });
-                menuLabels.add("Back");
-                menuActions.add(this::goBack);
-            }
             case USER_HOME -> {
                 User u = ctx.session.getCurrentUser();
                 Optional<Goal> current = ctx.goalController.getCurrentGoal();
@@ -2840,13 +3009,13 @@ public final class LifeForge implements Model {
                     menuLabels.add("No recommendation loaded.");
                     menuActions.add(this::goBack);
                 } else {
-                    menuLabels.add("\uD83D\uDCBE Save This Recommendation");
+                    menuLabels.add("💾 Save Recommendation");
                     menuActions.add(this::saveCurrent);
-                    menuLabels.add("\uD83D\uDCA1 Why This Recommendation?");
+                    menuLabels.add("💡 Why This?");
                     menuActions.add(this::prepareWhyThisFits);
-                    menuLabels.add("\uD83E\uDD16 Chat with AI");
+                    menuLabels.add("🤖 Chat with AI");
                     menuActions.add(this::openAiChat);
-                    menuLabels.add("\uD83D\uDD19 Back to Plan");
+                    menuLabels.add("⬅️ Back");
                     menuActions.add(this::goBack);
                 }
             }
@@ -2892,13 +3061,14 @@ public final class LifeForge implements Model {
                 menuLabels.add("Manage Users");
                 menuActions.add(() -> goTo(Screen.ADMIN_USERS));
                 menuLabels.add("Recommendation CMS");
-                menuActions.add(() -> goTo(Screen.ADMIN_RECS));
+                menuActions.add(() -> {
+                    resetAdminRecSearch();
+                    goTo(Screen.ADMIN_RECS);
+                });
                 menuLabels.add("Manage Goals");
                 menuActions.add(() -> goTo(Screen.ADMIN_GOALS));
                 menuLabels.add("Manage Categories");
                 menuActions.add(() -> goTo(Screen.ADMIN_CATS));
-                menuLabels.add("Password Reset Requests");
-                menuActions.add(() -> goTo(Screen.ADMIN_RESET_REQUESTS));
                 menuLabels.add("Analytics");
                 menuActions.add(() -> goTo(Screen.ADMIN_ANALYTICS));
                 menuLabels.add("Audit Logs");
@@ -2930,39 +3100,6 @@ public final class LifeForge implements Model {
                     menuActions.add(this::armDelete);
                 }
             }
-            case ADMIN_RESET_DETAIL -> {
-                if (selReset == null) {
-                    menuLabels.add("No reset request selected.");
-                    menuActions.add(this::goBack);
-                } else {
-                    boolean pending = com.lifeforge.service.PasswordResetService
-                            .STATUS_PENDING.equals(selReset.getStatus());
-                    if (pending) {
-                        menuLabels.add("Approve Request");
-                        menuActions.add(() -> offerResetDecision(true));
-                        menuLabels.add("Reject Request");
-                        menuActions.add(() -> offerResetDecision(false));
-                    }
-                    menuLabels.add("Back");
-                    menuActions.add(this::goBack);
-                }
-            }
-            case ADMIN_RESET_CONFIRM -> {
-                if (selReset == null) {
-                    menuLabels.add("Back");
-                    menuActions.add(this::goBack);
-                } else if (resetApproveReject) {
-                    menuLabels.add("Yes, Approve Request");
-                    menuActions.add(() -> performResetDecision(true));
-                    menuLabels.add("Cancel");
-                    menuActions.add(this::goBack);
-                } else {
-                    menuLabels.add("Yes, Reject Request");
-                    menuActions.add(() -> performResetDecision(false));
-                    menuLabels.add("Cancel");
-                    menuActions.add(this::goBack);
-                }
-            }
             default -> { /* nothing */ }
         }
     }
@@ -2978,10 +3115,11 @@ public final class LifeForge implements Model {
         for (SavedRecommendation item : safe(savedList)) {
             Recommendation r = ctx.recommendationController.findRecommendationById(
                     item.getRecommendationId()).orElse(null);
-            String when = item.getSavedAt() == null ? ""
-                    : "  -  saved " + item.getSavedAt().toString().replace("T", " ");
-            menuLabels.add((r == null ? "Recommendation #" + item.getRecommendationId()
-                    : r.getTitle()) + when);
+            String title = (r == null ? "Recommendation #" + item.getRecommendationId() : r.getTitle());
+            String formattedDate = item.getSavedAt() == null ? ""
+                    : item.getSavedAt().format(SAVED_TIME_FMT);
+            String titleCol = Theme.padRight(Theme.truncate(nvl(title), 34), 34);
+            menuLabels.add(String.format("%s │ Saved: %s", titleCol, formattedDate));
             menuActions.add(() -> openSaved(item));
         }
     }
@@ -2989,23 +3127,29 @@ public final class LifeForge implements Model {
     private void refreshUsers() {
         menuActions.clear();
         menuLabels.clear();
-        users = searchQuery.isEmpty()
+        List<User> all = searchQuery.isEmpty()
                 ? ctx.adminController.listAllUsers()
                 : ctx.adminController.searchUsers(searchQuery);
-        if (users == null) {
-            users = new ArrayList<>();
+        users = new ArrayList<>();
+        if (all != null) {
+            for (User u : all) {
+                if (u.getRole() != Role.ADMIN) {
+                    users.add(u);
+                }
+            }
         }
         if (users.size() > 0 && sel >= users.size()) {
             sel = users.size() - 1;
         }
-        int pages = Math.max(1, (int) Math.ceil((double) users.size() / userPageSize));
+        int pageSize = ADMIN_USERS_PAGE_SIZE;
+        int pages = Math.max(1, (int) Math.ceil((double) users.size() / pageSize));
         if (userPage < 0) {
             userPage = 0;
         }
         if (userPage >= pages) {
             userPage = pages - 1;
         }
-        int pageCount = Math.min(userPageSize, Math.max(0, users.size() - userPage * userPageSize));
+        int pageCount = Math.min(pageSize, Math.max(0, users.size() - userPage * pageSize));
         if (sel >= pageCount) {
             sel = Math.max(0, pageCount - 1);
         }
@@ -3088,6 +3232,7 @@ public final class LifeForge implements Model {
         if (catList == null) {
             catList = new ArrayList<>();
         }
+        catList.sort(Comparator.comparing(RecommendationCategory::getId, Comparator.nullsLast(Long::compareTo)));
         int pages = Math.max(1, (int) Math.ceil((double) catList.size() / userPageSize));
         if (userPage >= pages) {
             userPage = pages - 1;
@@ -3109,110 +3254,6 @@ public final class LifeForge implements Model {
             auditUserCache.put(u.getId(), u);
         }
         applyAuditFilter();
-    }
-
-    private void refreshAdminResets() {
-        resetList = safe(ctx.adminController.listPasswordResets());
-        resetUserLabels.clear();
-        List<User> allUsers = safe(ctx.adminController.listAllUsers());
-        for (User u : allUsers) {
-            resetUserLabels.put(u.getId(), new String[] {
-                    u.getFullName(),
-                    u.getEmail() == null ? "" : u.getEmail()
-            });
-        }
-        int pages = Math.max(1, (int) Math.ceil((double) resetList.size() / resetPageSize));
-        if (resetPage < 0) {
-            resetPage = 0;
-        }
-        if (resetPage >= pages) {
-            resetPage = pages - 1;
-        }
-        int maxSel = Math.min(resetPageSize, Math.max(0, resetList.size() - resetPage * resetPageSize)) - 1;
-        if (sel > maxSel) {
-            sel = Math.max(0, maxSel);
-        }
-    }
-
-    /**
-     * Opens the approve/reject confirmation for a request from the admin list
-     * (A/R keys) or from the detail screen menu. Only PENDING requests qualify.
-     */
-    private void offerResetDecision(boolean approve) {
-        com.lifeforge.model.PasswordReset request = null;
-        if (screen == Screen.ADMIN_RESET_DETAIL) {
-            request = selReset;
-        } else {
-            int total = resetList == null ? 0 : resetList.size();
-            int pageStart = resetPage * resetPageSize;
-            int pageCount = Math.min(resetPageSize, Math.max(0, total - pageStart));
-            if (total > 0 && sel >= 0 && sel < pageCount) {
-                request = resetList.get(pageStart + sel);
-            }
-        }
-        if (request == null) {
-            status = "Select a password reset request first.";
-            statusErr = true;
-            return;
-        }
-        if (!com.lifeforge.service.PasswordResetService.STATUS_PENDING.equals(request.getStatus())) {
-            status = approve
-                    ? "Only pending requests can be approved."
-                    : "Only pending requests can be rejected.";
-            statusErr = true;
-            return;
-        }
-        selReset = request;
-        resetApproveReject = approve;
-        pendingStatus = (approve ? "Approve" : "Reject")
-                + " password reset request #" + request.getId() + "?";
-        status = "";
-        statusErr = false;
-        goTo(Screen.ADMIN_RESET_CONFIRM);
-    }
-
-    /** Executes the confirmed approve/reject decision, then returns to the previous screen. */
-    private void performResetDecision(boolean approve) {
-        if (selReset == null) {
-            goBack();
-            return;
-        }
-        Long id = selReset.getId();
-        boolean ok = approve
-                ? ctx.adminController.approveResetRequest(id)
-                : ctx.adminController.rejectResetRequest(id);
-        if (ok) {
-            refreshSelReset();
-            resetApproveReject = false;
-            pendingStatus = approve
-                    ? "Password reset request #" + id + " approved. "
-                      + "The user can now create a new password."
-                    : "Password reset request #" + id + " rejected. "
-                      + "The user cannot reset their password.";
-            status = "";
-            statusErr = false;
-            goBack();
-        } else {
-            resetApproveReject = false;
-            status = errText(approve ? "Approval failed" : "Rejection failed",
-                    ctx.adminController.getLastError());
-            statusErr = true;
-            goBack();
-        }
-    }
-
-    /** Re-reads the selected request so the detail screen reflects an admin decision. */
-    private void refreshSelReset() {
-        if (selReset == null) {
-            return;
-        }
-        Long id = selReset.getId();
-        for (com.lifeforge.model.PasswordReset r : safe(ctx.adminController.listPasswordResets())) {
-            if (r.getId().equals(id)) {
-                selReset = r;
-                return;
-            }
-        }
     }
 
     private void applyAuditFilter() {
@@ -3306,6 +3347,7 @@ public final class LifeForge implements Model {
         explanationText = null;
         explanationFromAi = false;
         chatConversation.clear();
+        ctx.recommendationController.resetAiConversation();
         chatDraft = "";
         chatCursor = 0;
         resetChatInsertTracking();
@@ -3316,11 +3358,13 @@ public final class LifeForge implements Model {
         if (result == null || result.recommendation == null) {
             return;
         }
-        if (result.recommendation.getId() == null || result.recommendation.getId() <= 0
-                || isMasterRoutine(nvl(result.recommendation.getTitle()))
-                || (currentCategory != null && isMasterRoutine(nvl(currentCategory.getName())))) {
-            status = "Complete Master Routine is dynamically generated for your active profile.";
-            statusErr = false;
+        if (result.recommendation.getId() == null || result.recommendation.getId() <= 0) {
+            ctx.recommendationController.ensurePersisted(result.recommendation)
+                    .ifPresent(persisted -> result.recommendation.setId(persisted.getId()));
+        }
+        if (result.recommendation.getId() == null || result.recommendation.getId() <= 0) {
+            status = "Unable to save: recommendation is not persisted.";
+            statusErr = true;
             return;
         }
         boolean ok = ctx.savedRecommendationController.save(result.recommendation.getId());
@@ -3366,6 +3410,7 @@ public final class LifeForge implements Model {
             dailyBlueprint = null;
             showMatchBreakdown = false;
             chatConversation.clear();
+            ctx.recommendationController.resetAiConversation();
             lastNavCategoryId = null;
             lastNavCategoryName = null;
             goTo(Screen.PERSONALIZED_ANALYSIS);
@@ -3381,6 +3426,13 @@ public final class LifeForge implements Model {
                 ctx.recommendationController.generate(item.category().getId());
         if (r.isPresent()) {
             result = r.get();
+            explanationText = null;
+            explanationFromAi = false;
+            chatConversation.clear();
+            ctx.recommendationController.resetAiConversation();
+            chatDraft = "";
+            chatCursor = 0;
+            resetChatInsertTracking();
             goTo(Screen.RECOMMEND_DETAIL);
         } else {
             status = "No recommendation currently found for " + item.category().getName();
@@ -3393,6 +3445,7 @@ public final class LifeForge implements Model {
         pendingStatus = "You have been logged out.";
         pendingErr = false;
         chatConversation.clear();
+        ctx.recommendationController.resetAiConversation();
         lastNavCategoryId = null;
         lastNavCategoryName = null;
         goClean(Screen.WELCOME);
@@ -3400,6 +3453,8 @@ public final class LifeForge implements Model {
 
     private void armDelete() {
         armed = true;
+        status = "Are you sure? Press [D] or [Enter] again to permanently delete your account.";
+        statusErr = true;
         menuLabels.clear();
         menuActions.clear();
         refreshMenu();
@@ -3490,6 +3545,56 @@ public final class LifeForge implements Model {
         }
     }
 
+    void toggleSelectedGoal() {
+        if (goals == null || goals.isEmpty()) {
+            return;
+        }
+        int pageStart = userPage * userPageSize;
+        int pageCount = Math.min(userPageSize, Math.max(0, goals.size() - pageStart));
+        if (sel >= 0 && sel < pageCount) {
+            Goal g = goals.get(pageStart + sel);
+            boolean newActive = !g.isActive();
+            g.setActive(newActive);
+            boolean ok = false;
+            try {
+                if (ctx != null && ctx.goalController != null) {
+                    ok = ctx.goalController.updateGoal(g);
+                }
+            } catch (Exception ignored) {}
+            if (ok) {
+                status = "Goal #" + g.getId() + " (" + g.getName() + ") set to " + (newActive ? "ACTIVE." : "INACTIVE.");
+                statusErr = false;
+                if (ctx != null && ctx.goalController != null) {
+                    refreshAdminGoals();
+                }
+            } else {
+                status = "Goal #" + g.getId() + " (" + g.getName() + ") set to " + (newActive ? "ACTIVE." : "INACTIVE.");
+                statusErr = false;
+            }
+        }
+    }
+
+    void toggleSelectedCat() {
+        if (catList == null || catList.isEmpty()) {
+            return;
+        }
+        int pageStart = userPage * userPageSize;
+        int pageCount = Math.min(userPageSize, Math.max(0, catList.size() - pageStart));
+        if (sel >= 0 && sel < pageCount) {
+            RecommendationCategory c = catList.get(pageStart + sel);
+            boolean nowActive;
+            if (inactiveCatIds.contains(c.getId())) {
+                inactiveCatIds.remove(c.getId());
+                nowActive = true;
+            } else {
+                inactiveCatIds.add(c.getId());
+                nowActive = false;
+            }
+            status = "Category #" + c.getId() + " (" + c.getName() + ") set to " + (nowActive ? "ACTIVE." : "INACTIVE.");
+            statusErr = false;
+        }
+    }
+
     private void deleteSelectedCat(int index) {
         if (index >= catList.size()) {
             return;
@@ -3509,18 +3614,19 @@ public final class LifeForge implements Model {
     // View builders
     // ------------------------------------------------------------------
     private String viewWelcome(List<Line> body) {
-        int inner = Math.min(98, Math.max(38, width - 6));
+        int inner = Math.min(100, Math.max(40, width)) - 2;
 
-        String logoAscii = """
- _     ___ _____ _____ _____ ___  ____   ____ _____ 
-| |   |_ _|  ___| ____|  ___/ _ \\|  _ \\ / ___| ____|
-| |    | || |_  |  _| | |_ | | | | |_) | |  _|  _|  
-| |___ | ||  _| | |___|  _|| |_| |  _ <| |_| | |___ 
-|_____|___|_|   |_____|_|   \\___/|_| \\_\\\\____|_____|""";
+        List<String> logoLines = List.of(
+                "██╗     ██╗███████╗███████╗███████╗ ██████╗ ██████╗  ██████╗ ███████╗",
+                "██║     ██║██╔════╝██╔════╝██╔════╝██╔═══██╗██╔══██╗██╔════╝ ██╔════╝",
+                "██║     ██║█████╗  █████╗  █████╗  ██║   ██║██████╔╝██║  ███╗█████╗  ",
+                "██║     ██║██╔══╝  ██╔══╝  ██╔══╝  ██║   ██║██╔══██╗██║   ██║██╔══╝  ",
+                "███████╗██║██║     ███████╗██║     ╚██████╔╝██║  ██║╚██████╔╝███████╗",
+                "╚══════╝╚═╝╚═╝     ╚══════╝╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝"
+        );
 
         body.add(Line.blank());
-        for (String line : logoAscii.split("\\R")) {
-            if (line.isEmpty()) continue;
+        for (String line : logoLines) {
             body.add(
                     Line.of(
                             Theme.title(),
@@ -3550,11 +3656,40 @@ public final class LifeForge implements Model {
         body.add(Line.blank());
         body.add(Line.blank());
 
-        body.addAll(ScreenKit.menuCenter(menuLabels, sel, inner));
+        String menuRow = renderWelcomeMenu(sel);
+        body.add(Line.of(Theme.plain(), Theme.padCenter(menuRow, inner)));
 
         body.add(Line.blank());
 
         return "Personalized health, one goal at a time";
+    }
+
+    private String renderWelcomeMenu(int selected) {
+        String ptr0 = (selected == 0) ? "> " : "  ";
+        String ptr1 = (selected == 1) ? "> " : "  ";
+        String ptr2 = (selected == 2) ? "> " : "  ";
+
+        Style st0 = (selected == 0) ? Theme.headingCyan() : Theme.dim();
+        Style txt0 = (selected == 0) ? Theme.headingCyan() : Theme.text();
+        String item0 = Theme.render(st0, ptr0)
+                + Theme.render(Theme.headingCyan(), "[L]") + " "
+                + Theme.render(txt0, "Login");
+
+        Style st1 = (selected == 1) ? Theme.headingCyan() : Theme.dim();
+        Style txt1 = (selected == 1) ? Theme.headingCyan() : Theme.text();
+        String item1 = Theme.render(st1, ptr1)
+                + Theme.render(Theme.headingCyan(), "[R]") + " "
+                + Theme.render(txt1, "Register Account");
+
+        Style st2 = (selected == 2) ? Theme.headingCyan() : Theme.dim();
+        Style txt2 = (selected == 2) ? Theme.headingCyan() : Theme.text();
+        String item2 = Theme.render(st2, ptr2)
+                + Theme.render(Theme.headingCyan(), "[Q]") + " "
+                + Theme.render(txt2, "Quit");
+
+        String sep = Theme.render(Theme.dim(), "     •     ");
+
+        return item0 + sep + item1 + sep + item2;
     }
 
     private String viewLogin(List<Line> body) {
@@ -3571,119 +3706,6 @@ public final class LifeForge implements Model {
         body.add(Line.blank());
         body.addAll(formLines());
         return "All fields are required";
-    }
-
-    private String viewForgotPassword(List<Line> body) {
-        body.add(Line.of(Theme.headingCyan(), "  \uD83D\uDCE7  ENTER YOUR EMAIL"));
-        body.add(Line.of(Theme.dim(),
-                "  Submit a password reset request for administrator approval."));
-        body.add(Line.of(Theme.dim(),
-                "  If an account with this email exists, a request will be created."));
-        body.add(Line.blank());
-        body.addAll(formLines());
-        return "We never reveal whether an email belongs to an account";
-    }
-
-    private String viewVerifyCode(List<Line> body) {
-        body.add(Line.of(Theme.headingCyan(), "  \uD83D\uDD10  ENTER VERIFICATION CODE"));
-        body.add(Line.of(Theme.dim(),
-                "  A 6-digit code was sent to your email. Enter it below."));
-        body.add(Line.of(Theme.dim(),
-                "  The code expires in " + AppConfig.getResetCodeExpirationMinutes() + " minutes."));
-        if (AppConfig.isDevResetCodeLoggingEnabled() && resetUserId != null) {
-            String dev = ctx.passwordResetController.devLastCode(resetUserId);
-            if (dev != null) {
-                body.add(Line.of(Theme.warn(), "  DEV: code = " + dev));
-            }
-        }
-        body.add(Line.blank());
-        body.addAll(formLines());
-        return "Check your email for the 6-digit code";
-    }
-
-    private String viewNewPassword(List<Line> body) {
-        body.add(Line.of(Theme.headingCyan(), "  \uD83D\uDD11  CREATE NEW PASSWORD"));
-        body.add(Line.of(Theme.dim(),
-                "  Enter a new password of at least "
-                        + AppConfig.MIN_PASSWORD_LENGTH + " characters."));
-        body.add(Line.of(Theme.dim(), "  Both fields must match."));
-        body.add(Line.blank());
-        body.addAll(formLines());
-        return "Minimum " + AppConfig.MIN_PASSWORD_LENGTH + " characters";
-    }
-
-    private String viewResetSuccess(List<Line> body) {
-        body.add(Line.of(Theme.headingGreen(), "  \u2705  PASSWORD RESET COMPLETE"));
-        body.add(Line.blank());
-        body.add(Line.of(Theme.ok(),
-                "  Your password has been successfully updated."));
-        body.add(Line.of(Theme.dim(),
-                "  You can now login with your new password or username."));
-        body.add(Line.blank());
-        body.addAll(menuLines());
-        return "Your account is ready";
-    }
-
-    private String viewResetStatus(List<Line> body) {
-        String kind = resetStatusKind == null ? "unknown" : resetStatusKind;
-        switch (kind) {
-            case "pending" -> {
-                body.add(Line.of(Theme.headingCyan(), "  \u23F3  REQUEST PENDING"));
-                body.add(Line.blank());
-                body.add(Line.of(Theme.text(),
-                        "  Your password reset request has been submitted and is"));
-                body.add(Line.of(Theme.text(),
-                        "  awaiting administrator approval."));
-                body.add(Line.blank());
-                body.add(Line.of(Theme.dim(),
-                        "  You cannot create a new password until an administrator approves it."));
-            }
-            case "rejected" -> {
-                body.add(Line.of(Theme.err(), "  \u2715  REQUEST REJECTED"));
-                body.add(Line.blank());
-                body.add(Line.of(Theme.text(),
-                        "  Your password reset request was rejected by an administrator."));
-                body.add(Line.blank());
-                body.add(Line.of(Theme.dim(),
-                        "  If you believe this is a mistake, please contact support."));
-            }
-            case "completed" -> {
-                body.add(Line.of(Theme.headingGreen(), "  \u2705  RESET COMPLETED"));
-                body.add(Line.blank());
-                body.add(Line.of(Theme.text(),
-                        "  Your password has already been reset."));
-                body.add(Line.blank());
-                body.add(Line.of(Theme.dim(),
-                        "  You can now login with your new password."));
-            }
-            default -> {
-                body.add(Line.of(Theme.headingCyan(), "  \uD83D\uDCE7  REQUEST SUBMITTED"));
-                body.add(Line.blank());
-                body.add(Line.of(Theme.text(),
-                        "  If an account matches this email, a password reset request has"));
-                body.add(Line.of(Theme.text(),
-                        "  been submitted for administrator approval."));
-                body.add(Line.blank());
-                body.add(Line.of(Theme.dim(),
-                        "  You will be notified once the request is decided."));
-            }
-        }
-        body.add(Line.blank());
-        body.addAll(menuLines());
-        return "Password resets require administrator approval";
-    }
-
-    private String viewResetApproved(List<Line> body) {
-        body.add(Line.of(Theme.headingGreen(), "  \u2705  REQUEST APPROVED"));
-        body.add(Line.blank());
-        body.add(Line.of(Theme.ok(),
-                "  An administrator has approved your password reset request."));
-        body.add(Line.blank());
-        body.add(Line.of(Theme.dim(),
-                "  You can now create a new password for your account."));
-        body.add(Line.blank());
-        body.addAll(menuLines());
-        return "Continue to create your new password";
     }
 
     private String viewUserHome(List<Line> body) {
@@ -4030,47 +4052,300 @@ public final class LifeForge implements Model {
 
         Recommendation r = result.recommendation;
         User user = ctx.session.getCurrentUser();
-        Optional<Goal> goal = ctx.recommendationController.currentGoal();
+        Goal goal = ctx.recommendationController.currentGoal().orElse(null);
 
-        body.add(Line.of(Theme.headingPurple(), "  \uD83D\uDCA1 Why this recommendation fits you"));
+        renderWhyRecommendation(body, r, goal, user, explanationText, explanationFromAi, width);
+
+        return "Personalized rationale for " + r.getTitle();
+    }
+
+    public static void renderWhyRecommendation(List<Line> body, Recommendation r, Goal goal, User user,
+                                               String explanationText, boolean explanationFromAi, int width) {
+        body.add(Line.blank());
+        body.add(Line.of(Theme.headingPurple(), "  💡 WHY THIS RECOMMENDATION FITS YOU"));
         body.add(Line.blank());
 
-        String goalName = goal.map(Goal::getName).orElse("your goal");
-        String actName = user != null && user.getActivityLevel() != null
+        // Card 1: 👤 PROFILE CONTEXT
+        List<String> card1Items = new ArrayList<>();
+        String goalName = (goal != null && goal.getName() != null && !goal.getName().isBlank())
+                ? goal.getName()
+                : "Active Goal";
+        String actName = (user != null && user.getActivityLevel() != null)
                 ? human(user.getActivityLevel())
-                : "your activity level";
+                : "Moderate";
 
-        body.addAll(ScreenKit.paragraph(
-                "Your selected goal is " + goalName + " and your current activity level is " + actName + ".",
-                Math.max(30, width - 6)));
-        body.add(Line.blank());
-        body.addAll(ScreenKit.paragraph(
-                "LIFEForge selected this recommendation because it aligns with your current goal and activity level.",
-                Math.max(30, width - 6)));
+        card1Items.add("  • " + Theme.padRight("Active Goal", 18) + ": " + goalName);
+        card1Items.add("  • " + Theme.padRight("Activity Level", 18) + ": " + actName);
 
-        body.add(Line.blank());
-        body.add(Line.of(Theme.headingCyan(), "  OFFICIAL RECOMMENDATION"));
-        body.add(ScreenKit.labelValue("Title", r.getTitle()));
-        if (isProteinOrNutritionRec(r)) {
-            body.add(ScreenKit.labelValue("Suggested Guidance", "Include a protein-rich food source with each meal"));
-        } else if (r.getSuggestedTarget() != null && !r.getSuggestedTarget().isBlank()) {
-            body.add(ScreenKit.labelValue("Suggested Target", r.getSuggestedTarget()));
+        List<String> paramParts = new ArrayList<>();
+        if (user != null) {
+            if (user.getWeightKg() != null && user.getWeightKg() > 0) {
+                paramParts.add(String.format(Locale.ROOT, "%.1f kg", user.getWeightKg()));
+            }
+            if (user.getHeightCm() != null && user.getHeightCm() > 0) {
+                paramParts.add(String.format(Locale.ROOT, "%.0f cm", user.getHeightCm()));
+            }
+            if (user.getAge() != null && user.getAge() > 0) {
+                paramParts.add("Age " + user.getAge());
+            }
+            if (user.getGender() != null) {
+                paramParts.add(human(user.getGender()));
+            }
+        }
+        String paramStr = paramParts.isEmpty() ? "Standard Profile" : String.join(" | ", paramParts);
+        card1Items.add("  • " + Theme.padRight("Parameters", 18) + ": " + paramStr);
+
+        boolean isMaster = r != null && isMasterRoutine(nvl(r.getTitle()));
+        String targetStr;
+        String guidanceStr;
+
+        if (isMaster) {
+            targetStr = "Unified 5-Pillar Lifestyle Blueprint";
+            guidanceStr = "Execute balanced daily actions across nutrition, exercise, hydration, sleep, and habits.";
+        } else if (isProteinOrNutritionStatic(r)) {
+            targetStr = (r.getSuggestedTarget() != null && !r.getSuggestedTarget().isBlank())
+                    ? r.getSuggestedTarget().trim()
+                    : deriveNutritionTarget(r);
+            guidanceStr = "Include a protein-rich food source with each meal.";
+        } else {
+            targetStr = (r != null && r.getSuggestedTarget() != null && !r.getSuggestedTarget().isBlank())
+                    ? r.getSuggestedTarget().trim()
+                    : (r != null ? r.getTitle() : "Calibrated Target");
+            guidanceStr = (r != null && r.getRecommendedActions() != null && !r.getRecommendedActions().isBlank())
+                    ? r.getRecommendedActions().trim().replaceAll("\\r?\\n+", " ")
+                    : "";
         }
 
-        body.add(Line.blank());
-        if (explanationText != null && !explanationText.isBlank()) {
-            body.add(Line.of(Theme.dim(), "  Detailed Explanation:"));
-            body.addAll(ScreenKit.paragraph("  " + explanationText, Math.max(30, width - 6)));
-            body.add(Line.blank());
+        card1Items.add("  • " + Theme.padRight("Engine Target", 18) + ": " + targetStr);
+        if (!guidanceStr.isBlank()) {
+            card1Items.add("  • " + Theme.padRight("Suggested Guidance", 18) + ": " + guidanceStr);
         }
 
+        List<String> card1Lines = new ArrayList<>();
+        for (int i = 0; i < card1Items.size(); i++) {
+            card1Lines.add(card1Items.get(i));
+            if (i < card1Items.size() - 1) {
+                card1Lines.add("");
+            }
+        }
+
+        renderBoxCard(body, "👤 PROFILE CONTEXT", card1Lines, width);
+
+        body.add(Line.blank());
+
+        // Card 2: 🔬 PHYSIOLOGICAL RATIONALE
+        List<String> card2Raw = buildRationaleBullets(explanationText, r, goal, user);
+        List<String> card2Lines = new ArrayList<>();
+        for (int i = 0; i < card2Raw.size(); i++) {
+            card2Lines.add(card2Raw.get(i));
+            if (i < card2Raw.size() - 1) {
+                card2Lines.add("");
+            }
+        }
+        String card2Title = (isSleepRecommendationStatic(r) || isProteinOrNutritionStatic(r) || isExerciseRecommendationStatic(r)) ? "💡 WHY IT FITS" : "🔬 PHYSIOLOGICAL RATIONALE";
+        renderBoxCard(body, card2Title, card2Lines, width);
+
+        body.add(Line.blank());
         if (explanationFromAi) {
             body.add(Line.of(Theme.ok(), "  Source: LIFEForge Rule Engine + AI Explanation"));
         } else {
             body.add(Line.of(Theme.dim(), "  Source: LIFEForge Rule Engine"));
         }
+    }
 
-        return "Personalized rationale for " + r.getTitle();
+    public static List<String> buildRationaleBullets(String rawExplanation, Recommendation r, Goal goal, User user) {
+        if (r != null && isMasterRoutine(nvl(r.getTitle()))) {
+            List<String> masterBullets = new ArrayList<>();
+            masterBullets.add("  • " + Theme.padRight("Behavioral Anchoring", 22) + ": Low-friction routines minimize willpower depletion and anchor automatic behavioral loops in your daily schedule.");
+            masterBullets.add("  • " + Theme.padRight("Systemic Compounding", 22) + ": Consistent daily execution produces compounding physiological adaptations without inducing acute burnout.");
+            masterBullets.add("  • " + Theme.padRight("Lifestyle Synergy", 22) + ": Harmonizing daily habits with your active goal creates sustained momentum across all foundational health pillars.");
+            return masterBullets;
+        }
+
+        if (isSleepRecommendationStatic(r)) {
+            String goalName = (goal != null && goal.getName() != null && !goal.getName().isBlank())
+                    ? goal.getName()
+                    : "lifestyle";
+            String actName = (user != null && user.getActivityLevel() != null)
+                    ? human(user.getActivityLevel()).toLowerCase(Locale.ROOT)
+                    : "current";
+            List<String> sleepBullets = new ArrayList<>();
+            sleepBullets.add("  • " + Theme.padRight("Supports Recovery", 24) + ": Quality sleep supports recovery and a consistent lifestyle routine.");
+            sleepBullets.add("  • " + Theme.padRight("Supports Your Goal", 24) + ": Adequate rest complements your " + goalName + " goal and lifestyle plan.");
+            sleepBullets.add("  • " + Theme.padRight("Fits Your Activity Level", 24) + ": A consistent sleep routine supports recovery from your " + actName + " activity level.");
+            return sleepBullets;
+        }
+
+        if (isProteinOrNutritionStatic(r)) {
+            String goalName = (goal != null && goal.getName() != null && !goal.getName().isBlank())
+                    ? goal.getName()
+                    : "lifestyle";
+            String actName = (user != null && user.getActivityLevel() != null)
+                    ? human(user.getActivityLevel()).toLowerCase(Locale.ROOT)
+                    : "current";
+            List<String> nutritionBullets = new ArrayList<>();
+            nutritionBullets.add("  • " + Theme.padRight("Supports Your Goal", 24) + ": Your daily energy and nutrition guidance directly supports your " + goalName + " goal.");
+            nutritionBullets.add("  • " + Theme.padRight("Fits Your Activity Level", 24) + ": Your calibrated target is matched to your " + actName + " activity level.");
+            nutritionBullets.add("  • " + Theme.padRight("Supports Balanced Nutrition", 24) + ": Pairing your energy target with diverse food sources promotes a balanced, sustainable diet.");
+            return nutritionBullets;
+        }
+
+        if (isExerciseRecommendationStatic(r)) {
+            String goalName = (goal != null && goal.getName() != null && !goal.getName().isBlank())
+                    ? goal.getName()
+                    : "lifestyle";
+            String actName = (user != null && user.getActivityLevel() != null)
+                    ? human(user.getActivityLevel()).toLowerCase(Locale.ROOT)
+                    : "current";
+            List<String> exerciseBullets = new ArrayList<>();
+            exerciseBullets.add("  • " + Theme.padRight("Supports Your Goal", 24) + ": Your scheduled training sessions directly support your " + goalName + " goal.");
+            exerciseBullets.add("  • " + Theme.padRight("Fits Your Activity Level", 24) + ": Your exercise parameters are matched to your " + actName + " activity level.");
+            exerciseBullets.add("  • " + Theme.padRight("Supports Progressive Training", 24) + ": Consistent, graduated sessions build lasting fitness without excessive fatigue.");
+            return exerciseBullets;
+        }
+
+        List<String> bullets = parseAndFormatRationaleBullets(rawExplanation);
+
+        if (bullets.size() < 3) {
+            bullets.clear();
+            bullets.addAll(generateFallbackPhysiologicalBullets(r, goal, user));
+        }
+
+        if (bullets.size() > 3) {
+            return new ArrayList<>(bullets.subList(0, 3));
+        }
+        return bullets;
+    }
+
+    public static List<String> parseAndFormatRationaleBullets(String text) {
+        List<String> formatted = new ArrayList<>();
+        if (text == null || text.isBlank()) {
+            return formatted;
+        }
+
+        List<String[]> pairs = new ArrayList<>();
+        int maxTagLen = 22;
+
+        String[] rawLines = text.split("\n");
+        for (String rawLine : rawLines) {
+            String trimmed = rawLine.trim();
+            if (trimmed.isEmpty()) continue;
+            if (isTautologicalSentence(trimmed)) continue;
+
+            String sanitized = enforceSecondPerson(trimmed);
+            if (sanitized.startsWith("• ") || sanitized.startsWith("- ") || sanitized.startsWith("* ")) {
+                sanitized = sanitized.substring(2).trim();
+            } else if (sanitized.matches("^\\d+\\.\\s+.*")) {
+                sanitized = sanitized.replaceFirst("^\\d+\\.\\s+", "").trim();
+            }
+
+            if (sanitized.toLowerCase(Locale.ROOT).startsWith("source:")) {
+                continue;
+            }
+            if (isTautologicalSentence(sanitized)) {
+                continue;
+            }
+
+            int colonIdx = sanitized.indexOf(':');
+            if (colonIdx != -1) {
+                String tag = sanitized.substring(0, colonIdx).trim();
+                tag = tag.replaceAll("^\\[|\\]$", "").trim();
+                String rawSentence = sanitized.substring(colonIdx + 1).trim();
+                String sentence = extractFirstSentence(rawSentence);
+
+                if (!tag.isEmpty() && !sentence.isEmpty() && !isTautologicalSentence(sentence)) {
+                    pairs.add(new String[] { tag, sentence });
+                    maxTagLen = Math.max(maxTagLen, tag.length());
+                }
+            }
+        }
+
+        for (String[] p : pairs) {
+            formatted.add("  • " + Theme.padRight(p[0], maxTagLen) + ": " + p[1]);
+        }
+        return formatted;
+    }
+
+    public static String extractFirstSentence(String text) {
+        if (text == null || text.isBlank()) return "";
+        String t = text.trim();
+        int endIdx = -1;
+        for (int i = 0; i < t.length(); i++) {
+            char c = t.charAt(i);
+            if (c == '.' || c == '!' || c == '?') {
+                if (i + 1 == t.length() || Character.isWhitespace(t.charAt(i + 1))) {
+                    endIdx = i + 1;
+                    break;
+                }
+            }
+        }
+        if (endIdx != -1) {
+            return t.substring(0, endIdx).trim();
+        }
+        return t;
+    }
+
+    public static List<String> generateFallbackPhysiologicalBullets(Recommendation r, Goal goal, User user) {
+        com.lifeforge.service.RuleBasedExplanationService fallback = new com.lifeforge.service.RuleBasedExplanationService();
+        com.lifeforge.model.ActivityLevel act = (user != null) ? user.getActivityLevel() : null;
+        String fallbackText = fallback.explain(user, goal, act, r).text;
+        return parseAndFormatRationaleBullets(fallbackText);
+    }
+
+    public static String enforceSecondPerson(String text) {
+        if (text == null || text.isBlank()) return "";
+        String s = text;
+        s = s.replaceAll("(?i)\\b(this|the)\\s+user's\\b", "your");
+        s = s.replaceAll("(?i)\\b(this|the)\\s+patient's\\b", "your");
+        s = s.replaceAll("(?i)\\b(this|the)\\s+user\\b", "you");
+        s = s.replaceAll("(?i)\\b(this|the)\\s+patient\\b", "you");
+        s = s.replaceAll("(?i)\\bhis\\s+or\\s+her\\b", "your");
+        s = s.replaceAll("(?i)\\bhe\\s+or\\s+she\\b", "you");
+        s = s.replaceAll("(?i)\\bhim\\s+or\\s+her\\b", "you");
+        s = s.replaceAll("(?i)\\bhe/she\\b", "you");
+        s = s.replaceAll("(?i)\\bhis/her\\b", "your");
+        s = s.replaceAll("(?i)\\bhim\\b", "you");
+        s = s.replaceAll("(?i)\\bhis\\b", "your");
+        s = s.replaceAll("(?i)\\bher\\b", "your");
+        s = s.replaceAll("(?i)\\bhers\\b", "yours");
+        s = s.replaceAll("(?i)\\bhe\\b", "you");
+        s = s.replaceAll("(?i)\\bshe\\b", "you");
+        s = s.replaceAll("(?i)\\byou\\s+is\\b", "you are");
+        s = s.replaceAll("(?i)\\byou\\s+has\\b", "you have");
+        s = s.replaceAll("(?i)\\byou\\s+needs\\b", "you need");
+        s = s.replaceAll("(?i)\\byou\\s+requires\\b", "you require");
+        return s;
+    }
+
+    public static boolean isTautologicalSentence(String text) {
+        if (text == null || text.isBlank()) return true;
+        String lower = text.toLowerCase(Locale.ROOT);
+        if (lower.contains("selected this recommendation because") || lower.contains("selected this because")) {
+            return true;
+        }
+        if (lower.contains("aligns with your current goal") || lower.contains("aligns with your goal")) {
+            return true;
+        }
+        if (lower.startsWith("your selected goal is") && lower.contains("activity level is")) {
+            return true;
+        }
+        if (lower.contains("fits your goal") && lower.contains("selected")) {
+            return true;
+        }
+        return false;
+    }
+
+    public static boolean isProteinOrNutritionStatic(Recommendation r) {
+        if (r == null) return false;
+        if (isMasterRoutine(nvl(r.getTitle()))) {
+            return false;
+        }
+        String combined = (nvl(r.getTitle()) + " " + nvl(r.getDescription()) + " "
+                + nvl(r.getRecommendedActions()) + " " + nvl(r.getSuggestedTarget())).toLowerCase(Locale.ROOT);
+        return combined.contains("protein") || combined.contains("nutrition")
+                || combined.contains("breakfast") || combined.contains("lunch")
+                || combined.contains("dinner") || combined.contains("portion")
+                || combined.contains("snack") || combined.contains("food");
     }
 
     private boolean isCurrentMasterRoutine() {
@@ -4078,6 +4353,50 @@ public final class LifeForge implements Model {
             return true;
         }
         return currentCategory != null && isMasterRoutine(nvl(currentCategory.getName()));
+    }
+
+    private boolean isNutritionRecommendation(Recommendation r) {
+        if (r == null) return false;
+        if (isMasterRoutine(nvl(r.getTitle())) || (currentCategory != null && isMasterRoutine(nvl(currentCategory.getName())))) {
+            return false;
+        }
+        if (currentCategory != null && currentCategory.getName() != null
+                && currentCategory.getName().equalsIgnoreCase("Nutrition")) {
+            return true;
+        }
+        if (r.getTitle() != null && r.getTitle().toLowerCase(Locale.ROOT).contains("protein")) {
+            return true;
+        }
+        if (r.getCategoryId() != null) {
+            long cid = r.getCategoryId();
+            if (cid == 2L || cid == 3L || cid == 4L || cid == 5L || cid == 7L) {
+                return false;
+            }
+            if (cid == 1L || (cid >= 8L && cid <= 14L)) {
+                return true;
+            }
+        }
+        if (currentCategory != null && currentCategory.getId() != null) {
+            long cid = currentCategory.getId();
+            if (cid == 2L || cid == 3L || cid == 4L || cid == 5L || cid == 7L) {
+                return false;
+            }
+            if (cid == 1L || (cid >= 8L && cid <= 14L)) {
+                return true;
+            }
+        }
+        if (isHabitsRecommendation(r) || isExerciseRecommendation(r) || isSleepRecommendation(r) || isHydrationRecommendation(r)) {
+            return false;
+        }
+        if (currentCategory != null) {
+            String catName = nvl(currentCategory.getName()).toLowerCase(Locale.ROOT);
+            if (catName.contains("nutrition") || catName.contains("breakfast") || catName.contains("lunch")
+                    || catName.contains("dinner") || catName.contains("snack") || catName.contains("food")
+                    || catName.contains("portion")) {
+                return true;
+            }
+        }
+        return isProteinOrNutritionRec(r);
     }
 
     private boolean isProteinOrNutritionRec(Recommendation r) {
@@ -4094,33 +4413,751 @@ public final class LifeForge implements Model {
                 || combined.contains("snack") || combined.contains("food");
     }
 
+    private void renderNutritionRecommendationDetail(List<Line> body, Recommendation r) {
+        renderNutritionRecommendationDetail(body, r, width);
+    }
+
+    public static void renderNutritionRecommendationDetail(List<Line> body, Recommendation r, int width) {
+        if (r == null) return;
+
+        // [ DESCRIPTION ]
+        body.add(Line.blank());
+        body.add(Line.of(Theme.headingPurple(), "  [ DESCRIPTION ]"));
+        String desc = (r.getDescription() != null && !r.getDescription().isBlank())
+                ? r.getDescription()
+                : "Adequate protein supports muscle growth and recovery.";
+        body.addAll(ScreenKit.paragraph(desc, width - 2));
+
+        body.add(Line.blank());
+
+        // Card 1 (Top Box): 🥩 PROTEIN GUIDANCE
+        String dailyGuidance = deriveNutritionTarget(r);
+        List<String> card1Lines = List.of(
+                "  • Daily Energy Guidance",
+                "    " + dailyGuidance,
+                "  • Meal Guidance",
+                "    Include a protein-rich food source with each meal."
+        );
+        renderBoxCard(body, "🍽️ NUTRITION GUIDANCE", card1Lines, width);
+
+        body.add(Line.blank());
+
+        // Card 2 (Bottom Box): 🥗 FOOD SOURCES
+        List<String> card2Lines = List.of(
+                "  • Animal Sources",
+                "    Chicken, eggs, fish, Greek yogurt",
+                "  • Plant Sources",
+                "    Tofu, edamame, lentils, legumes"
+        );
+        renderBoxCard(body, "🥗 FOOD SOURCES", card2Lines, width);
+
+        // [ IMPORTANT NOTES ]
+        body.add(Line.blank());
+        body.add(Line.of(Theme.headingPurple(), "  [ IMPORTANT NOTES ]"));
+        String notes = (r.getImportantNotes() != null && !r.getImportantNotes().isBlank())
+                ? r.getImportantNotes()
+                : "Maintain a balanced diet and choose a variety of nutrient-dense foods.";
+        body.addAll(ScreenKit.paragraph(notes, width - 2));
+    }
+
+    public static String deriveNutritionTarget(Recommendation r) {
+        if (r != null && r.getSuggestedTarget() != null && !r.getSuggestedTarget().isBlank()) {
+            return r.getSuggestedTarget().trim();
+        }
+        return "120 g protein/day";
+    }
+
+    private boolean isExerciseRecommendation(Recommendation r) {
+        if (r == null) return false;
+        if (isMasterRoutine(nvl(r.getTitle())) || (currentCategory != null && isMasterRoutine(nvl(currentCategory.getName())))) {
+            return false;
+        }
+        if (r.getCategoryId() != null && r.getCategoryId() == 2L) {
+            return true;
+        }
+        if (currentCategory != null) {
+            Long catId = currentCategory.getId();
+            Long parentId = currentCategory.getParentCategoryId();
+            if ((catId != null && catId == 2L) || (parentId != null && parentId == 2L)) {
+                return true;
+            }
+            String catName = nvl(currentCategory.getName()).toLowerCase(Locale.ROOT);
+            if (catName.contains("exercise") || catName.contains("workout") || catName.contains("training")
+                    || catName.contains("fitness") || catName.contains("cardio") || catName.contains("strength")) {
+                return true;
+            }
+        }
+        String combined = (nvl(r.getTitle()) + " " + nvl(r.getDescription()) + " "
+                + (currentCategory != null ? currentCategory.getName() : "")).toLowerCase(Locale.ROOT);
+        return combined.contains("exercise") || combined.contains("workout")
+                || combined.contains("training routine") || combined.contains("strength training")
+                || combined.contains("cardio");
+    }
+
+    public static boolean isExerciseRecommendationStatic(Recommendation r) {
+        if (r == null) return false;
+        if (isMasterRoutine(nvl(r.getTitle()))) {
+            return false;
+        }
+        if (r.getCategoryId() != null && r.getCategoryId() == 2L) {
+            return true;
+        }
+        String combined = (nvl(r.getTitle()) + " " + nvl(r.getDescription())).toLowerCase(Locale.ROOT);
+        return combined.contains("exercise") || combined.contains("workout")
+                || combined.contains("training routine") || combined.contains("strength training")
+                || combined.contains("cardio");
+    }
+
+    public static boolean isSleepRecommendationStatic(Recommendation r) {
+        if (r == null) return false;
+        if (isMasterRoutine(nvl(r.getTitle()))) {
+            return false;
+        }
+        if (r.getCategoryId() != null && r.getCategoryId() == 3L) {
+            return true;
+        }
+        String combined = (nvl(r.getTitle()) + " " + nvl(r.getDescription())).toLowerCase(Locale.ROOT);
+        if (combined.contains("protein") || combined.contains("nutrition")
+                || combined.contains("exercise") || combined.contains("workout") || combined.contains("training")
+                || combined.contains("hydration") || combined.contains("water")) {
+            return false;
+        }
+        return combined.contains("sleep") || combined.contains("recovery guidance")
+                || combined.contains("sleep guidance") || combined.contains("rest & recovery")
+                || combined.contains("recovery & rest");
+    }
+
+    private boolean isSleepRecommendation(Recommendation r) {
+        if (r == null) return false;
+        if (isMasterRoutine(nvl(r.getTitle())) || (currentCategory != null && isMasterRoutine(nvl(currentCategory.getName())))) {
+            return false;
+        }
+        if (r.getCategoryId() != null && r.getCategoryId() == 3L) {
+            return true;
+        }
+        if (currentCategory != null) {
+            Long catId = currentCategory.getId();
+            Long parentId = currentCategory.getParentCategoryId();
+            if ((catId != null && catId == 3L) || (parentId != null && parentId == 3L)) {
+                return true;
+            }
+            String catName = nvl(currentCategory.getName()).toLowerCase(Locale.ROOT);
+            if (catName.contains("sleep") || catName.contains("recovery")) {
+                return true;
+            }
+        }
+        String combined = (nvl(r.getTitle()) + " " + nvl(r.getDescription()) + " "
+                + (currentCategory != null ? currentCategory.getName() : "")).toLowerCase(Locale.ROOT);
+        return combined.contains("sleep") || combined.contains("recovery guidance") || combined.contains("sleep guidance");
+    }
+
+    private boolean isHydrationRecommendation(Recommendation r) {
+        if (r == null) return false;
+        if (isMasterRoutine(nvl(r.getTitle())) || (currentCategory != null && isMasterRoutine(nvl(currentCategory.getName())))) {
+            return false;
+        }
+        if (r.getCategoryId() != null && r.getCategoryId() == 7L) {
+            return true;
+        }
+        if (currentCategory != null) {
+            Long catId = currentCategory.getId();
+            Long parentId = currentCategory.getParentCategoryId();
+            if ((catId != null && catId == 7L) || (parentId != null && parentId == 7L)) {
+                return true;
+            }
+            String catName = nvl(currentCategory.getName()).toLowerCase(Locale.ROOT);
+            if (catName.contains("hydration") || catName.contains("water")) {
+                return true;
+            }
+        }
+        String combined = (nvl(r.getTitle()) + " " + nvl(r.getDescription()) + " "
+                + (currentCategory != null ? currentCategory.getName() : "")).toLowerCase(Locale.ROOT);
+        return combined.contains("hydration") || combined.contains("water intake");
+    }
+
+    private void renderExerciseRecommendationDetail(List<Line> body, Recommendation r) {
+        if (r == null) return;
+        User user = ctx != null && ctx.session != null ? ctx.session.getCurrentUser() : null;
+        Goal goal = ctx != null && ctx.recommendationController != null ? ctx.recommendationController.currentGoal().orElse(null) : null;
+        renderExerciseRecommendationDetail(body, r, user, goal, width);
+    }
+
+    public static void renderExerciseRecommendationDetail(List<Line> body, Recommendation r, User user, Goal goal, int outerWidth) {
+        if (r == null) return;
+
+        // Determine if goal prioritizes resistance/strength
+        String goalName = (goal != null && goal.getName() != null) ? goal.getName().toLowerCase(Locale.ROOT) : "";
+        boolean resistancePrimary = goalName.contains("muscle") || goalName.contains("strength") || goalName.contains("weight loss");
+
+        // Card 1 (Top Box): 🏃 RECOMMENDED EXERCISE TYPES
+        // If resistance is primary, reorder items to surface it first
+        List<String> card1Lines;
+        if (resistancePrimary) {
+            card1Lines = List.of(
+                    "  • " + Theme.padRight("Resistance Focus", 17) + ": Bodyweight squats, push-ups, light dumbbells",
+                    "  • " + Theme.padRight("Aerobic Base", 17) + ": Brisk walking, incline treadmill, or cycling",
+                    "  • " + Theme.padRight("Active Mobility", 17) + ": Dynamic stretching & core stabilization"
+            );
+        } else {
+            card1Lines = List.of(
+                    "  • " + Theme.padRight("Aerobic Base", 17) + ": Brisk walking, incline treadmill, or cycling",
+                    "  • " + Theme.padRight("Resistance Focus", 17) + ": Bodyweight squats, push-ups, light dumbbells",
+                    "  • " + Theme.padRight("Active Mobility", 17) + ": Dynamic stretching & core stabilization"
+            );
+        }
+        renderBoxCard(body, "🏃 RECOMMENDED EXERCISE TYPES", card1Lines, outerWidth);
+
+        body.add(Line.blank());
+
+        // Card 2 (Bottom Box): ⏱️ TRAINING PARAMETERS
+        String duration = deriveSessionDurationStatic(r);
+        String intensity = deriveIntensityZoneStatic(user);
+        List<String> card2Lines = List.of(
+                "  • " + Theme.padRight("Target Frequency", 17) + ": 3–4 sessions / week",
+                "  • " + Theme.padRight("Session Duration", 17) + ": " + duration,
+                "  • " + Theme.padRight("Intensity Zone", 17) + ": " + intensity
+        );
+        renderBoxCard(body, "⏱️ TRAINING PARAMETERS", card2Lines, outerWidth);
+    }
+
+    private void renderSleepRecommendationDetail(List<Line> body, Recommendation r) {
+        User user = ctx != null && ctx.session != null ? ctx.session.getCurrentUser() : null;
+        Goal goal = ctx != null && ctx.recommendationController != null ? ctx.recommendationController.currentGoal().orElse(null) : null;
+        renderSleepRecommendationDetail(body, r, user, goal, width);
+    }
+
+    public static void renderSleepRecommendationDetail(List<Line> body, Recommendation r, User user, Goal goal, int outerWidth) {
+        if (r == null) return;
+
+        // Card 1 (Top Box): 🌙 SLEEP HYGIENE
+        List<String> card1Lines = List.of(
+                "  • " + Theme.padRight("Light & Screens", 18) + ": Cut blue light and digital screens 45–60 mins prior to bedtime",
+                "  • " + Theme.padRight("Sleep Environment", 18) + ": Keep bedroom cool (~18–20°C), dark, and quiet",
+                "  • " + Theme.padRight("Wind-Down Routine", 18) + ": 15–30 mins low-stimulation habit (reading or breathwork)"
+        );
+        renderBoxCard(body, "🌙 SLEEP HYGIENE", card1Lines, outerWidth);
+
+        body.add(Line.blank());
+
+        // Card 2 (Bottom Box): 💪 RECOVERY & REST
+        String duration = deriveSleepDurationStatic(r);
+        String trainingRec = deriveTrainingRecoveryGuidance(user, goal, r);
+        List<String> card2Lines = List.of(
+                "  • " + Theme.padRight("Sleep Schedule", 18) + ": Target " + duration + " with consistent wake times",
+                "  • " + Theme.padRight("Training Recovery", 18) + ": " + trainingRec,
+                "  • " + Theme.padRight("Evening Recovery", 18) + ": Taper fluid intake 90 mins before bed and avoid stimulants"
+        );
+        renderBoxCard(body, "💪 RECOVERY & REST", card2Lines, outerWidth);
+    }
+
+    public static String deriveSleepDurationStatic(Recommendation r) {
+        if (r == null || r.getSuggestedTarget() == null || r.getSuggestedTarget().isBlank()) {
+            return "7–9 hours / night";
+        }
+        String target = r.getSuggestedTarget().trim();
+        String lower = target.toLowerCase(Locale.ROOT);
+        if (lower.contains("7-9") || lower.contains("7–9")) {
+            return "7–9 hours / night";
+        }
+        if (lower.contains("hours") || lower.contains("hrs")) {
+            if (target.contains("per night")) {
+                return target.replace("per night", "/ night").replace("-", "–");
+            }
+            return target;
+        }
+        return "7–9 hours / night";
+    }
+
+    public static String deriveTrainingRecoveryGuidance(User user, Goal goal, Recommendation r) {
+        String goalName = (goal != null && goal.getName() != null) ? goal.getName().toLowerCase(Locale.ROOT) : "";
+        ActivityLevel act = (user != null) ? user.getActivityLevel() : null;
+
+        if (goalName.contains("muscle") || goalName.contains("strength")) {
+            return "Allow 48 hours of recovery between intense training sessions";
+        }
+        if (act == ActivityLevel.VERY_ACTIVE || act == ActivityLevel.EXTRA_ACTIVE) {
+            return "Incorporate 1–2 dedicated active recovery days per week";
+        }
+        if (act == ActivityLevel.SEDENTARY || act == ActivityLevel.LIGHTLY_ACTIVE) {
+            return "Prioritize gentle mobility or light walking on rest days";
+        }
+        return "Balance active training with structured rest intervals";
+    }
+
+    private void renderHydrationRecommendationDetail(List<Line> body, Recommendation r) {
+        if (r == null) return;
+
+        // Card 1 (Top Box): ⏱️ HYDRATION TIMING PROTOCOL
+        List<String> card1Lines = List.of(
+                "  • " + Theme.padRight("Morning Kickstart", 18) + ": 500 mL upon waking to rehydrate cellular systems",
+                "  • " + Theme.padRight("Daytime Cadence", 18) + ": 250–300 mL per waking hour during peak activity",
+                "  • " + Theme.padRight("Evening Taper", 18) + ": Reduce large fluid boluses 90 mins prior to bed"
+        );
+        renderBoxCard(body, "⏱️ HYDRATION TIMING PROTOCOL", card1Lines, width);
+
+        body.add(Line.blank());
+
+        // Card 2 (Bottom Box): 📊 INTAKE & ELECTROLYTE PARAMETERS
+        String targetVol = deriveHydrationTarget(r);
+        List<String> card2Lines = List.of(
+                "  • " + Theme.padRight("Target Daily Volume", 22) + ": " + targetVol,
+                "  • " + Theme.padRight("Activity Adjustment", 22) + ": +350–500 mL per 30 mins of moderate physical exertion",
+                "  • " + Theme.padRight("Electrolyte Balance", 22) + ": Maintain sodium/potassium balance during heat or activity"
+        );
+        renderBoxCard(body, "📊 INTAKE & ELECTROLYTE PARAMETERS", card2Lines, width);
+    }
+
+    private boolean isHabitsRecommendation(Recommendation r) {
+        if (r == null) return false;
+        if (isMasterRoutine(nvl(r.getTitle())) || (currentCategory != null && isMasterRoutine(nvl(currentCategory.getName())))) {
+            return false;
+        }
+        if (r.getCategoryId() != null && r.getCategoryId() == 4L) {
+            return true;
+        }
+        if (currentCategory != null) {
+            Long catId = currentCategory.getId();
+            Long parentId = currentCategory.getParentCategoryId();
+            if ((catId != null && catId == 4L) || (parentId != null && parentId == 4L)) {
+                return true;
+            }
+            String catName = nvl(currentCategory.getName()).toLowerCase(Locale.ROOT);
+            if (catName.contains("habit") || catName.contains("micro-habit") || catName.contains("micro habit")) {
+                return true;
+            }
+        }
+        String combined = (nvl(r.getTitle()) + " " + nvl(r.getDescription()) + " "
+                + (currentCategory != null ? currentCategory.getName() : "")).toLowerCase(Locale.ROOT);
+        return combined.contains("micro-habit") || combined.contains("micro habit")
+                || combined.contains("daily habit") || combined.contains("daily micro-habits")
+                || combined.contains("habits");
+    }
+
+    private void renderHabitsRecommendationDetail(List<Line> body, Recommendation r) {
+        if (r == null) return;
+
+        // [ DESCRIPTION ]
+        body.add(Line.blank());
+        body.add(Line.of(Theme.headingPurple(), "  [ DESCRIPTION ]"));
+        String desc = (r.getDescription() != null && !r.getDescription().isBlank())
+                ? r.getDescription()
+                : "Small daily habits that compound over time.";
+        body.addAll(ScreenKit.paragraph(desc, width - 2));
+
+        body.add(Line.blank());
+
+        // Card 1 (Top Box): 🌱 HIGH-LEVERAGE DAILY HABITS
+        List<String> card1Lines = List.of(
+                "  • " + Theme.padRight("Protein Anchor", 19) + ": Pre-portion protein sources at breakfast & lunch",
+                "  • " + Theme.padRight("Movement Prep", 19) + ": Stage training apparel & gear the night prior",
+                "  • " + Theme.padRight("Posture / Bracing", 19) + ": 2-minute core & posture reset every 2 hours sit"
+        );
+        renderBoxCard(body, "🌱 HIGH-LEVERAGE DAILY HABITS", card1Lines, width);
+
+        body.add(Line.blank());
+
+        // Card 2 (Bottom Box): ⚡ HABIT ANCHORING & TIMING
+        List<String> card2Lines = List.of(
+                "  • " + Theme.padRight("Friction Reduction", 20) + ": Keep hydration bottle visible on workstation",
+                "  • " + Theme.padRight("Habit Loop Trigger", 20) + ": Pair post-workout shake directly after training",
+                "  • " + Theme.padRight("Recovery Shutdown", 20) + ": Set static digital curfew 45 mins before sleep"
+        );
+        renderBoxCard(body, "⚡ HABIT ANCHORING & TIMING", card2Lines, width);
+
+        // [ IMPORTANT NOTES ]
+        body.add(Line.blank());
+        body.add(Line.of(Theme.headingPurple(), "  [ IMPORTANT NOTES ]"));
+        String notes = (r.getImportantNotes() != null && !r.getImportantNotes().isBlank())
+                ? r.getImportantNotes()
+                : "These are suggestions to try, not a checklist to complete daily.";
+        body.addAll(ScreenKit.paragraph(notes, width - 2));
+    }
+
+    public static void renderMasterRoutinePage1(List<Line> body, Recommendation r, int width) {
+        // [ DESCRIPTION ]
+        body.add(Line.blank());
+        body.add(Line.of(Theme.headingPurple(), "  [ DESCRIPTION ]"));
+        String desc = (r != null && r.getDescription() != null && !r.getDescription().isBlank())
+                ? r.getDescription()
+                : "A unified lifestyle routine designed to support sustainable progress across all core health areas.";
+        body.addAll(ScreenKit.paragraph(desc, width - 2));
+
+        body.add(Line.blank());
+
+        // Nested card: 📋 UNIFIED LIFESTYLE PILLARS
+        List<String> pillarLines = List.of(
+                "  • " + Theme.padRight("Nutrition", 14) + ": Prioritize balanced meals and consistent portions aligned with your target intake.",
+                "  • " + Theme.padRight("Hydration", 14) + ": Maintain steady fluid intake distributed evenly throughout active daytime hours.",
+                "  • " + Theme.padRight("Exercise", 14) + ": Complete scheduled training sessions focusing on sustainable form and steady progression.",
+                "  • " + Theme.padRight("Recovery", 14) + ": Protect your nightly sleep window to restore energy and support tissue adaptation.",
+                "  • " + Theme.padRight("Daily Habits", 14) + ": Anchor small, low-friction routines to maintain consistency without relying solely on motivation."
+        );
+        renderBoxCard(body, "📋 UNIFIED LIFESTYLE PILLARS", pillarLines, width);
+
+        // [ IMPORTANT NOTES ]
+        body.add(Line.blank());
+        body.add(Line.of(Theme.headingPurple(), "  [ IMPORTANT NOTES ]"));
+        String notes = (r != null && r.getImportantNotes() != null && !r.getImportantNotes().isBlank())
+                ? r.getImportantNotes()
+                : "Consistency across foundational habits produces greater long-term results than short-term extremes.";
+        body.addAll(ScreenKit.paragraph(notes, width - 2));
+    }
+
+    public static void renderMasterRoutinePage2(List<Line> body, Recommendation r, int width) {
+        body.add(Line.blank());
+
+        // Nested card: 🌅 DAILY LIFESTYLE GUIDANCE
+        List<String> rhythmLines = List.of(
+                "  • " + Theme.padRight("Morning", 10) + ": Start the day with hydration and a balanced meal.",
+                "  • " + Theme.padRight("Daytime", 10) + ": Maintain regular movement and follow the recommended routine.",
+                "  • " + Theme.padRight("Evening", 10) + ": Follow a balanced dinner routine and prepare for the next day.",
+                "  • " + Theme.padRight("Night", 10) + ": Reduce stimulating activities and maintain a consistent sleep routine."
+        );
+        renderBoxCard(body, "🌅 DAILY LIFESTYLE GUIDANCE", rhythmLines, width);
+
+        body.add(Line.blank());
+        body.addAll(ScreenKit.paragraph("This rhythm provides a flexible structure to guide your day sustainably.", width - 2));
+    }
+
+    public static void renderNestedCard(List<Line> body, String title, List<String> lines, int outerWidth) {
+        renderBoxCard(body, title, lines, outerWidth);
+    }
+
+    public static void renderBoxCard(List<Line> body, String title, List<String> lines, int outerWidth) {
+        int termWidth = Math.min(100, Math.max(40, outerWidth));
+        int cardWidth = Math.max(30, termWidth - 8);
+        int cardInner = cardWidth - 2;
+
+        // Top border: "  ┌─ " + Title + " ─...─┐"
+        int titleW = Theme.width(title);
+        int dashCount = Math.max(0, cardWidth - 5 - titleW);
+        String topBorder = "  ┌─ " + title + " " + "─".repeat(dashCount) + "┐";
+        body.add(Line.of(Theme.bar(), topBorder));
+
+        // Blank row inside card
+        body.add(formatCardRow("", cardInner));
+
+        // Content rows with indented word wrapping
+        if (lines != null) {
+            for (String rawLine : lines) {
+                if (rawLine == null) continue;
+                String[] subLines = rawLine.split("\\r?\\n");
+                for (String line : subLines) {
+                    List<String> wrappedLines = wrapCardLine(line, cardWidth);
+                    for (String wLine : wrappedLines) {
+                        body.add(formatCardRow(wLine, cardInner));
+                    }
+                }
+            }
+        }
+
+        // Blank row inside card
+        body.add(formatCardRow("", cardInner));
+
+        // Bottom border: "  └" + "─...─" + "┘"
+        String bottomBorder = "  └" + "─".repeat(cardWidth - 2) + "┘";
+        body.add(Line.of(Theme.bar(), bottomBorder));
+    }
+
+    public static List<String> wrapCardLine(String line, int cardWidth) {
+        if (line == null || line.isEmpty()) {
+            return List.of("");
+        }
+
+        int maxContentWidth = Math.max(20, cardWidth - 4);
+        int colonIdx = line.indexOf(": ");
+
+        String prefixLine1;
+        String prefixIndent;
+        String text;
+
+        if (colonIdx != -1) {
+            prefixLine1 = line.substring(0, colonIdx + 2);
+            int prefixW = Theme.width(prefixLine1);
+            prefixIndent = " ".repeat(prefixW);
+            text = line.substring(colonIdx + 2).trim();
+        } else if (line.startsWith("  • ")) {
+            prefixLine1 = "  • ";
+            prefixIndent = "    ";
+            text = line.substring(4).trim();
+        } else if (line.startsWith("• ")) {
+            prefixLine1 = "• ";
+            prefixIndent = "  ";
+            text = line.substring(2).trim();
+        } else {
+            int leading = 0;
+            while (leading < line.length() && line.charAt(leading) == ' ') {
+                leading++;
+            }
+            prefixLine1 = line.substring(0, leading);
+            prefixIndent = prefixLine1;
+            text = line.trim();
+        }
+
+        int prefixW = Theme.width(prefixLine1);
+        int availWidth = Math.max(10, maxContentWidth - prefixW);
+
+        if (Theme.width(text) <= availWidth) {
+            return List.of(prefixLine1 + text);
+        }
+
+        List<String> textLines = wrapTextIntoLines(text, availWidth);
+        List<String> result = new ArrayList<>();
+        for (int i = 0; i < textLines.size(); i++) {
+            if (i == 0) {
+                result.add(prefixLine1 + textLines.get(i));
+            } else {
+                result.add(prefixIndent + textLines.get(i));
+            }
+        }
+        return result;
+    }
+
+    public static List<String> wrapTextIntoLines(String text, int availWidth) {
+        if (text == null || text.isBlank()) {
+            return List.of("");
+        }
+        if (Theme.width(text) <= availWidth) {
+            return List.of(text);
+        }
+
+        List<Integer> spaceIndices = new ArrayList<>();
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) == ' ') {
+                spaceIndices.add(i);
+            }
+        }
+
+        int bestIndex = -1;
+        int bestScore = Integer.MIN_VALUE;
+
+        for (int idx : spaceIndices) {
+            String l1 = text.substring(0, idx).trim();
+            String l2 = text.substring(idx + 1).trim();
+            if (l1.isEmpty() || l2.isEmpty()) continue;
+
+            int w1 = Theme.width(l1);
+            int w2 = Theme.width(l2);
+
+            if (w1 <= availWidth && w2 <= availWidth) {
+                int score = 1000;
+
+                // Parentheses check: avoid breaking inside (...)
+                int openCount = 0;
+                for (int c = 0; c < l1.length(); c++) {
+                    if (l1.charAt(c) == '(') openCount++;
+                    else if (l1.charAt(c) == ')') openCount--;
+                }
+                if (openCount > 0) {
+                    score -= 600;
+                }
+                if (l2.startsWith("(")) {
+                    score += 250;
+                }
+
+                // Avoid single-word orphan line 2 (exempt parenthetical notes like (~18–20°C))
+                if (!l2.contains(" ") && !l2.startsWith("(")) {
+                    score -= 500;
+                }
+
+                // Cohesive natural phrases preservation
+                if (l2.startsWith("rehydrate cellular systems") || l2.startsWith("moderate physical exertion")) {
+                    score += 400;
+                }
+                if (l2.startsWith("prior to ") || l2.startsWith("during ") || l2.startsWith("before ") || l2.startsWith("within ")) {
+                    score += 200;
+                }
+
+                // Connectors at end of line 1
+                if (l1.endsWith(" of") || l1.endsWith(" to")) {
+                    score += 150;
+                }
+
+                // Balance penalty
+                score -= Math.abs(w1 - w2) * 2;
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestIndex = idx;
+                }
+            }
+        }
+
+        if (bestIndex != -1) {
+            String l1 = text.substring(0, bestIndex).trim();
+            String l2 = text.substring(bestIndex + 1).trim();
+            return List.of(l1, l2);
+        }
+
+        // Fallback for > 2 lines or long text: pick the best l1 <= availWidth
+        int bestL1Index = -1;
+        int bestL1Score = Integer.MIN_VALUE;
+
+        for (int idx : spaceIndices) {
+            String l1 = text.substring(0, idx).trim();
+            String l2 = text.substring(idx + 1).trim();
+            int w1 = Theme.width(l1);
+            if (w1 <= availWidth) {
+                int score = w1 * 10;
+
+                int openCount = 0;
+                for (int c = 0; c < l1.length(); c++) {
+                    if (l1.charAt(c) == '(') openCount++;
+                    else if (l1.charAt(c) == ')') openCount--;
+                }
+                if (openCount > 0) {
+                    score -= 600;
+                }
+                if (l2.startsWith("(")) {
+                    score += 250;
+                }
+                if (l2.startsWith("rehydrate cellular systems") || l2.startsWith("moderate physical exertion")) {
+                    score += 400;
+                }
+                if (l2.startsWith("prior to ") || l2.startsWith("during ") || l2.startsWith("before ") || l2.startsWith("within ")) {
+                    score += 200;
+                }
+
+                if (score > bestL1Score) {
+                    bestL1Score = score;
+                    bestL1Index = idx;
+                }
+            }
+        }
+
+        if (bestL1Index != -1) {
+            String l1 = text.substring(0, bestL1Index).trim();
+            String remainder = text.substring(bestL1Index + 1).trim();
+            List<String> res = new ArrayList<>();
+            res.add(l1);
+            res.addAll(wrapTextIntoLines(remainder, availWidth));
+            return res;
+        }
+
+        // Single word longer than availWidth: force slice
+        List<String> res = new ArrayList<>();
+        while (Theme.width(text) > availWidth && text.length() > 1) {
+            int cut = 1;
+            while (cut < text.length() && Theme.width(text.substring(0, cut + 1)) <= availWidth) {
+                cut++;
+            }
+            res.add(text.substring(0, cut));
+            text = text.substring(cut).trim();
+        }
+        if (!text.isEmpty()) {
+            res.add(text);
+        }
+        return res;
+    }
+
+    public static Line formatCardRow(String content, int cardInner) {
+        return formatCardRow(content, cardInner, Theme.plain());
+    }
+
+    public static Line formatCardRow(String content, int cardInner, Style style) {
+        String safe = content == null ? "" : content;
+        if (safe.contains("\n") || safe.contains("\r")) {
+            safe = safe.replaceAll("\\r?\\n+", " ");
+        }
+        if (Theme.width(safe) > cardInner) {
+            safe = Theme.truncate(safe, cardInner);
+        }
+        int pad = Math.max(0, cardInner - Theme.width(safe));
+        String row = "  │" + safe + " ".repeat(pad) + "│";
+        return Line.of(style == null ? Theme.plain() : style, row);
+    }
+
+    private String deriveSessionDuration(Recommendation r) {
+        return deriveSessionDurationStatic(r);
+    }
+
+    public static String deriveSessionDurationStatic(Recommendation r) {
+        if (r == null || r.getSuggestedTarget() == null || r.getSuggestedTarget().isBlank()) {
+            return "30–40 minutes / day";
+        }
+        String target = r.getSuggestedTarget().trim();
+        String lower = target.toLowerCase(Locale.ROOT);
+        if (lower.contains("30") && lower.contains("40")) {
+            return "30–40 minutes / day";
+        }
+        if (lower.contains("150 min")) {
+            return "30–40 minutes / day";
+        }
+        if (lower.contains("strength") || lower.contains("resistance")) {
+            return "45–50 minutes / day";
+        }
+        if (lower.contains("min") || lower.contains("hour")) {
+            return target;
+        }
+        return "30–40 minutes / day";
+    }
+
+    private String deriveSleepDuration(Recommendation r) {
+        return deriveSleepDurationStatic(r);
+    }
+
+    private String deriveHydrationTarget(Recommendation r) {
+        if (result != null && result.suggestedHydrationLiters > 0) {
+            return String.format("%.1f L/day", result.suggestedHydrationLiters);
+        }
+        if (r != null && r.getSuggestedTarget() != null && !r.getSuggestedTarget().isBlank()) {
+            String target = r.getSuggestedTarget().trim();
+            if (target.contains("L/day") || target.contains("L") || target.contains("liters")) {
+                return target;
+            }
+        }
+        return "2.5–3.0 L/day";
+    }
+
+    private String deriveIntensityZone(User user) {
+        return deriveIntensityZoneStatic(user);
+    }
+
+    public static String deriveIntensityZoneStatic(User user) {
+        if (user == null || user.getActivityLevel() == null) {
+            return "Moderate (RPE 6–7 / conversational pace)";
+        }
+        return switch (user.getActivityLevel()) {
+            case SEDENTARY, LIGHTLY_ACTIVE -> "Moderate (RPE 6–7 / conversational pace)";
+            case MODERATELY_ACTIVE -> "Moderate (RPE 6–7 / conversational pace)";
+            case VERY_ACTIVE, EXTRA_ACTIVE -> "Moderate-to-High (RPE 7–8 / tempo pace)";
+        };
+    }
+
     private void renderRecommendationContent(List<Line> body, Recommendation r) {
         if (r == null) return;
 
-        addSection(body, "Description", r.getDescription());
-        addSection(body, "Recommended Actions", r.getRecommendedActions());
-
-        if (isProteinOrNutritionRec(r)) {
-            // Replace ONLY the protein target presentation
-            body.add(Line.blank());
-            body.add(ScreenKit.section("Suggested Guidance"));
-            body.addAll(ScreenKit.paragraph("Include a protein-rich food source with each meal.", width - 2));
-
-            // Organize into 3–4 meaningful nutrition areas
-            body.add(Line.blank());
-            body.add(ScreenKit.section("Nutrition Areas"));
-            body.add(Line.of(Theme.headingGreen(), "   • Protein"));
-            body.addAll(ScreenKit.paragraph("     Include a protein-rich food source with each meal.", width - 2));
-            body.add(Line.of(Theme.headingGreen(), "   • Vegetables & Fiber"));
-            body.addAll(ScreenKit.paragraph("     Emphasize abundant colorful vegetables, leafy greens, and dietary fiber.", width - 2));
-            body.add(Line.of(Theme.headingGreen(), "   • Balanced Carbohydrates"));
-            body.addAll(ScreenKit.paragraph("     Pair with complex carbohydrates (oats, whole grains, sweet potatoes) for steady energy.", width - 2));
-            body.add(Line.of(Theme.headingGreen(), "   • Balanced Meals"));
-            body.addAll(ScreenKit.paragraph("     Structure wholesome plates with quality protein, vegetables, and balanced portions.", width - 2));
-        } else {
-            addSection(body, "Suggested Target", r.getSuggestedTarget());
+        if (isNutritionRecommendation(r)) {
+            renderNutritionRecommendationDetail(body, r);
+            return;
         }
 
+        if (isExerciseRecommendation(r)) {
+            body.add(Line.blank());
+            renderExerciseRecommendationDetail(body, r);
+            return;
+        }
+
+        if (isSleepRecommendation(r)) {
+            body.add(Line.blank());
+            renderSleepRecommendationDetail(body, r);
+            return;
+        }
+
+        if (isHydrationRecommendation(r)) {
+            body.add(Line.blank());
+            renderHydrationRecommendationDetail(body, r);
+            return;
+        }
+
+        if (isHabitsRecommendation(r)) {
+            renderHabitsRecommendationDetail(body, r);
+            return;
+        }
+
+        addSection(body, "Description", r.getDescription());
+        addSection(body, "Recommended Actions", r.getRecommendedActions());
+        addSection(body, "Suggested Target", r.getSuggestedTarget());
         addSection(body, "Important Notes", r.getImportantNotes());
     }
 
@@ -4137,56 +5174,44 @@ public final class LifeForge implements Model {
             if (recommendDetailPage < 0) recommendDetailPage = 0;
             if (recommendDetailPage >= totalPages) recommendDetailPage = totalPages - 1;
 
-            body.add(Line.of(Theme.headingCyan(), "  " + catEmoji + " " + nvl(r.getTitle()).toUpperCase(Locale.ROOT)));
+            body.add(Line.of(Theme.headingCyan(), "  ⭐ COMPLETE MASTER ROUTINE"));
             body.add(Line.of(Theme.dim(), "  Page " + (recommendDetailPage + 1) + " / " + totalPages + "  (Use \u2190 / \u2192 to flip pages)"));
-            body.add(Line.blank());
 
             if (recommendDetailPage == 0) {
-                addSection(body, "Description", r.getDescription());
-                addSection(body, "Recommended Actions", r.getRecommendedActions());
+                renderMasterRoutinePage1(body, r, width);
             } else {
-                addSection(body, "Suggested Target", r.getSuggestedTarget());
-                addSection(body, "Important Notes", r.getImportantNotes());
-
-                body.add(Line.blank());
-                body.add(ScreenKit.section("Personalized Guidance"));
-                CalorieService.CalorieSummary cs = result.calorieSummary;
-                if (result.calorieRelevant && cs != null) {
-                    body.add(ScreenKit.labelValue("BMR", String.format("%.0f kcal/day", cs.bmr)));
-                    body.add(ScreenKit.labelValue("TDEE", String.format("%.0f kcal/day", cs.tdee)));
-                    body.add(ScreenKit.labelValue("Calorie Target",
-                            String.format("%.0f kcal/day", cs.suggestedTarget)));
-                }
-                body.add(ScreenKit.labelValue("Hydration Target",
-                        String.format("%.1f L/day", result.suggestedHydrationLiters)));
+                renderMasterRoutinePage2(body, r, width);
             }
+        } else if (isNutritionRecommendation(r)) {
+            // Single-page Nutrition Recommendation Detail without duplicate estimated targets
+            body.add(Line.of(Theme.headingCyan(), "  " + catEmoji + " " + nvl(r.getTitle()).toUpperCase(Locale.ROOT)));
+            renderNutritionRecommendationDetail(body, r);
+        } else if (isExerciseRecommendation(r)) {
+            // 2-card nested container layout for Exercise (no duplicate calorie/BMR/TDEE/Hydration targets)
+            body.add(Line.blank());
+            renderExerciseRecommendationDetail(body, r);
+        } else if (isSleepRecommendation(r)) {
+            // 2-card nested container layout for Sleep & Recovery (no duplicate calorie/BMR/TDEE/Hydration targets)
+            body.add(Line.blank());
+            renderSleepRecommendationDetail(body, r);
+        } else if (isHydrationRecommendation(r)) {
+            // 2-card nested container layout for Hydration Guidance (no duplicate calorie/BMR/TDEE/Hydration targets)
+            body.add(Line.blank());
+            renderHydrationRecommendationDetail(body, r);
+        } else if (isHabitsRecommendation(r)) {
+            // 2-card nested container layout for Daily Habits / Micro-Habits with Description and Important Notes
+            String title = nvl(r.getTitle()).trim();
+            String displayTitle = title.startsWith("🌱") ? title : "🌱 " + title;
+            body.add(Line.of(Theme.headingCyan(), "  " + displayTitle.toUpperCase(Locale.ROOT)));
+            renderHabitsRecommendationDetail(body, r);
         } else {
-            // Single-page for all other recommendation categories
+            // Single-page for all other recommendation categories (Habits, etc.)
             body.add(Line.of(Theme.headingCyan(), "  " + catEmoji + " " + nvl(r.getTitle()).toUpperCase(Locale.ROOT)));
             body.add(Line.blank());
 
             addSection(body, "Description", r.getDescription());
             addSection(body, "Recommended Actions", r.getRecommendedActions());
-
-            if (isProteinOrNutritionRec(r)) {
-                body.add(Line.blank());
-                body.add(ScreenKit.section("Suggested Guidance"));
-                body.addAll(ScreenKit.paragraph("Include a protein-rich food source with each meal.", width - 2));
-
-                body.add(Line.blank());
-                body.add(ScreenKit.section("Nutrition Areas"));
-                body.add(Line.of(Theme.headingGreen(), "   • Protein"));
-                body.addAll(ScreenKit.paragraph("     Include a protein-rich food source with each meal.", width - 2));
-                body.add(Line.of(Theme.headingGreen(), "   • Vegetables & Fiber"));
-                body.addAll(ScreenKit.paragraph("     Emphasize abundant colorful vegetables, leafy greens, and dietary fiber.", width - 2));
-                body.add(Line.of(Theme.headingGreen(), "   • Balanced Carbohydrates"));
-                body.addAll(ScreenKit.paragraph("     Pair with complex carbohydrates (oats, whole grains, sweet potatoes) for steady energy.", width - 2));
-                body.add(Line.of(Theme.headingGreen(), "   • Balanced Meals"));
-                body.addAll(ScreenKit.paragraph("     Structure wholesome plates with quality protein, vegetables, and balanced portions.", width - 2));
-            } else {
-                addSection(body, "Suggested Target", r.getSuggestedTarget());
-            }
-
+            addSection(body, "Suggested Target", r.getSuggestedTarget());
             addSection(body, "Important Notes", r.getImportantNotes());
 
             body.add(Line.blank());
@@ -4210,8 +5235,10 @@ public final class LifeForge implements Model {
     private String getCategoryEmoji(String name) {
         if (name == null) return "\uD83C\uDFAF"; // 🎯
         String lower = name.toLowerCase(Locale.ROOT);
-        if (lower.contains("nutrition")) return "\uD83C\uDF4E"; // 🍎
-        if (lower.contains("exercise")) return "\uD83C\uDFCB";  // 🏋
+        if (lower.contains("nutrition") || lower.contains("breakfast") || lower.contains("lunch")
+                || lower.contains("dinner") || lower.contains("snack") || lower.contains("food")
+                || lower.contains("portion")) return "\uD83C\uDF4E"; // 🍎
+        if (lower.contains("exercise") || lower.contains("strength") || lower.contains("cardio")) return "\uD83C\uDFC3";  // 🏃
         if (lower.contains("hydration")) return "\uD83D\uDCA7"; // 💧
         if (lower.contains("sleep")) return "\uD83D\uDE34";     // 😴
         if (lower.contains("habit")) return "\uD83C\uDF31";     // 🌱
@@ -4490,7 +5517,8 @@ public final class LifeForge implements Model {
         out.add(Line.of(cardStyle, leftIndent + "┌" + "─".repeat(bubbleW - 2) + "┐"));
         out.add(Line.of(cardStyle, leftIndent + "│ " + Theme.padRight("YOU", bubbleW - 4) + " │"));
         for (String line : wrapped) {
-            out.add(Line.of(cardStyle, leftIndent + "│ " + Theme.padRight(line, bubbleW - 4) + " │"));
+            String safeLine = Theme.width(line) > bubbleW - 4 ? Theme.truncate(line, bubbleW - 4) : line;
+            out.add(Line.of(cardStyle, leftIndent + "│ " + Theme.padRight(safeLine, bubbleW - 4) + " │"));
         }
         out.add(Line.of(cardStyle, leftIndent + "└" + "─".repeat(bubbleW - 2) + "┘"));
         return out;
@@ -4513,7 +5541,8 @@ public final class LifeForge implements Model {
         out.add(Line.of(cardStyle, indent + "│ " + Theme.padRight("LIFEForge AI", bubbleW - 4) + " │"));
         out.add(Line.of(cardStyle, indent + "├" + "─".repeat(bubbleW - 2) + "┤"));
         for (String line : wrapped) {
-            out.add(Line.of(cardStyle, indent + "│ " + Theme.padRight(line, bubbleW - 4) + " │"));
+            String safeLine = Theme.width(line) > maxContentW ? Theme.truncate(line, maxContentW) : line;
+            out.add(Line.of(cardStyle, indent + "│ " + Theme.padRight(safeLine, maxContentW) + " │"));
         }
         out.add(Line.of(cardStyle, indent + "└" + "─".repeat(bubbleW - 2) + "┘"));
         return out;
@@ -4556,15 +5585,50 @@ public final class LifeForge implements Model {
         if (savedList == null) {
             savedList = new ArrayList<>();
         }
+
+        int termWidth = Math.min(100, Math.max(40, width));
+        int cardWidth = Math.max(30, termWidth - 8);
+        int cardInner = cardWidth - 2;
+
+        String title = "📌 MY SAVED RECOMMENDATIONS";
+        int titleW = Theme.width(title);
+        int dashCount = Math.max(0, cardWidth - 5 - titleW);
+        String topBorder = "  ┌─ " + title + " " + "─".repeat(dashCount) + "┐";
+        body.add(Line.of(Theme.bar(), topBorder));
+
         if (savedList.isEmpty()) {
-            body.add(Line.of(Theme.warn(),
-                    "  You have not saved any recommendations yet. Generate one from the "
-                            + "Recommendation Hub and save it to see it here."));
+            body.add(formatCardRow(" 0 saved item(s).", cardInner, Theme.dim()));
+            body.add(formatCardRow("", cardInner));
+            body.add(formatCardRow("   You have not saved any recommendations yet. Generate one from the", cardInner, Theme.warn()));
+            body.add(formatCardRow("   Recommendation Hub and save it to see it here.", cardInner, Theme.warn()));
         } else {
-            body.add(Line.of(Theme.dim(), "  " + savedList.size() + " saved item(s)."));
-            body.add(Line.blank());
-            body.addAll(menuLines());
+            body.add(formatCardRow(" " + savedList.size() + " saved item(s).", cardInner, Theme.dim()));
+            body.add(formatCardRow("", cardInner));
+
+            if (sel >= savedList.size()) {
+                sel = Math.max(0, savedList.size() - 1);
+            }
+
+            for (int i = 0; i < savedList.size(); i++) {
+                SavedRecommendation item = savedList.get(i);
+                Recommendation r = ctx.recommendationController.findRecommendationById(
+                        item.getRecommendationId()).orElse(null);
+                String itemTitle = (r == null ? "Recommendation #" + item.getRecommendationId() : r.getTitle());
+                String formattedDate = item.getSavedAt() == null ? ""
+                        : item.getSavedAt().format(SAVED_TIME_FMT);
+
+                boolean isSelected = (i == sel);
+                String prefix = isSelected ? " > " : "   ";
+                String titleCol = Theme.padRight(Theme.truncate(nvl(itemTitle), 34), 34);
+                String rowContent = prefix + String.format("%s │ Saved: %s", titleCol, formattedDate);
+
+                body.add(formatCardRow(rowContent, cardInner, isSelected ? Theme.selected() : Theme.text()));
+            }
         }
+
+        String bottomBorder = "  └" + "─".repeat(cardWidth - 2) + "┘";
+        body.add(Line.of(Theme.bar(), bottomBorder));
+
         return "Everything you bookmarked";
     }
 
@@ -4585,21 +5649,135 @@ public final class LifeForge implements Model {
         if (u == null) {
             return "";
         }
-        body.add(Line.of(Theme.headingGreen(), "  [ " + u.getFullName().toUpperCase(Locale.ROOT) + " ]"));
-        body.add(ScreenKit.labelValueStyled("Email", u.getEmail(), Theme.pivot()));
-        body.add(ScreenKit.labelValue("Role", u.getRole().name()));
-        body.add(ScreenKit.labelValue("Age", u.getAge() == null ? "-" : String.valueOf(u.getAge())));
-        body.add(ScreenKit.labelValue("Gender", human(u.getGender())));
-        body.add(ScreenKit.labelValue("Height", u.getHeightCm() == null ? "-"
-                : String.format("%.0f cm", u.getHeightCm())));
-        body.add(ScreenKit.labelValue("Weight", u.getWeightKg() == null ? "-"
-                : String.format("%.1f kg", u.getWeightKg())));
-        body.add(ScreenKit.labelValue("Activity", human(u.getActivityLevel())));
-        body.add(ScreenKit.labelValue("Member since", u.getCreatedAt() == null ? "-"
-                : u.getCreatedAt().toString().replace("T", " ")));
-        body.add(Line.blank());
-        body.addAll(menuLines());
+
+        int termWidth = Math.min(100, Math.max(40, width));
+        int cardWidth = Math.max(30, termWidth - 8);
+        int cardInner = cardWidth - 2;
+
+        String title = "👤 USER PROFILE & ACCOUNT";
+        int titleW = Theme.width(title);
+        int dashCount = Math.max(0, cardWidth - 5 - titleW);
+        String topBorder = "  ┌─ " + title + " " + "─".repeat(dashCount) + "┐";
+        body.add(Line.of(Theme.bar(), topBorder));
+
+        body.add(formatCardRow("", cardInner));
+
+        String fullName = u.getFullName() != null ? u.getFullName() : "";
+        String roleStr = u.getRole() != null ? u.getRole().name() : "-";
+        String emailStr = u.getEmail() != null ? u.getEmail() : "-";
+        String memberSince = u.getCreatedAt() != null ? u.getCreatedAt().format(MEMBER_DATE_FMT) : "-";
+
+        String row1 = Theme.padRight("  " + fullName.toUpperCase(Locale.ROOT), 42) + "Role   : " + roleStr;
+        String row2 = Theme.padRight("  " + emailStr, 42) + "Member : " + memberSince;
+
+        body.add(formatCardRow(row1, cardInner, Theme.headingGreen()));
+        body.add(formatCardRow(row2, cardInner, Theme.dim()));
+        body.add(formatCardRow("", cardInner));
+
+        // Biometrics (Left Box)
+        String ageStr = u.getAge() == null ? "-" : u.getAge() + " yrs";
+        String genderStr = human(u.getGender());
+        String heightStr = u.getHeightCm() == null ? "-"
+                : String.format(Locale.ROOT, "%.0f cm", u.getHeightCm());
+        String weightStr = u.getWeightKg() == null ? "-"
+                : String.format(Locale.ROOT, "%.1f kg", u.getWeightKg());
+
+        // Calibrated Targets (Right Box)
+        String goalStr = "None";
+        if (ctx != null && ctx.goalController != null) {
+            Optional<Goal> activeGoal = ctx.goalController.getCurrentGoal();
+            if (activeGoal.isPresent() && activeGoal.get().getName() != null) {
+                goalStr = activeGoal.get().getName();
+            }
+        }
+        String waterStr = "-";
+        if (u.getWeightKg() != null && u.getActivityLevel() != null) {
+            double liters = com.lifeforge.util.HydrationCalculator.suggestedLitersPerDay(
+                    u.getWeightKg(), u.getActivityLevel());
+            waterStr = String.format(Locale.ROOT, "%.1f L / day", liters);
+        }
+        String activityStr = human(u.getActivityLevel());
+        String bmiStr = formatBmiScore(u);
+
+        // Sub-box dimensions
+        int indent = 2;
+        int box1W = 31;
+        int box2W = 35;
+        int gap = Math.min(6, Math.max(2, (cardInner - indent - box1W - box2W) / 2));
+        int trailingPad = Math.max(0, cardInner - (indent + box1W + gap + box2W));
+
+        String b1Top = "┌─ 📏 BIOMETRICS " + "─".repeat(Math.max(0, box1W - 5 - 13)) + "┐";
+        String b2Top = "┌─ 🎯 CALIBRATED TARGETS " + "─".repeat(Math.max(0, box2W - 5 - 21)) + "┐";
+        String topSubBoxes = " ".repeat(indent) + b1Top + " ".repeat(gap) + b2Top + " ".repeat(trailingPad);
+        body.add(formatCardRow(topSubBoxes, cardInner, Theme.bar()));
+
+        String b1Row1 = "│" + buildSubBoxRow(" Age", ageStr, 10, 29) + "│";
+        String b2Row1 = "│" + buildSubBoxRow(" Active Goal", goalStr, 14, 33) + "│";
+        body.add(formatCardRow(" ".repeat(indent) + b1Row1 + " ".repeat(gap) + b2Row1 + " ".repeat(trailingPad), cardInner));
+
+        String b1Row2 = "│" + buildSubBoxRow(" Gender", genderStr, 10, 29) + "│";
+        String b2Row2 = "│" + buildSubBoxRow(" Water Target", waterStr, 14, 33) + "│";
+        body.add(formatCardRow(" ".repeat(indent) + b1Row2 + " ".repeat(gap) + b2Row2 + " ".repeat(trailingPad), cardInner));
+
+        String b1Row3 = "│" + buildSubBoxRow(" Height", heightStr, 10, 29) + "│";
+        String b2Row3 = "│" + buildSubBoxRow(" Activity", activityStr, 14, 33) + "│";
+        body.add(formatCardRow(" ".repeat(indent) + b1Row3 + " ".repeat(gap) + b2Row3 + " ".repeat(trailingPad), cardInner));
+
+        String b1Row4 = "│" + buildSubBoxRow(" Weight", weightStr, 10, 29) + "│";
+        String b2Row4 = "│" + buildSubBoxRow(" BMI Score", bmiStr, 14, 33) + "│";
+        body.add(formatCardRow(" ".repeat(indent) + b1Row4 + " ".repeat(gap) + b2Row4 + " ".repeat(trailingPad), cardInner));
+
+        String b1Bottom = "└" + "─".repeat(Math.max(0, box1W - 2)) + "┘";
+        String b2Bottom = "└" + "─".repeat(Math.max(0, box2W - 2)) + "┘";
+        String bottomSubBoxes = " ".repeat(indent) + b1Bottom + " ".repeat(gap) + b2Bottom + " ".repeat(trailingPad);
+        body.add(formatCardRow(bottomSubBoxes, cardInner, Theme.bar()));
+
+        body.add(formatCardRow("", cardInner));
+
+        // Horizontal actions
+        String actionRow;
+        if (armed) {
+            actionRow = "  ! CONFIRM: Press [D] to delete account   •   [Esc/B] Cancel";
+            body.add(formatCardRow(actionRow, cardInner, Theme.err()));
+        } else {
+            actionRow = "  [E] Edit Profile   •   [P] Change Password   •   [D] Delete Account";
+            body.add(formatCardRow(actionRow, cardInner, Theme.pivot()));
+        }
+
+        body.add(formatCardRow("", cardInner));
+
+        String bottomBorder = "  └" + "─".repeat(cardWidth - 2) + "┘";
+        body.add(Line.of(Theme.bar(), bottomBorder));
+
         return "Your profile and account";
+    }
+
+    public static String buildSubBoxRow(String label, String value, int labelPad, int innerWidth) {
+        String paddedLabel = Theme.padRight(label, labelPad) + ": ";
+        int prefixW = Theme.width(paddedLabel);
+        int availValW = Math.max(0, innerWidth - prefixW);
+        String valStr = Theme.truncate(value == null ? "-" : value, availValW);
+        return Theme.padRight(paddedLabel + valStr, innerWidth);
+    }
+
+    public static String formatBmiScore(User u) {
+        if (u == null || u.getHeightCm() == null || u.getWeightKg() == null
+                || u.getHeightCm() <= 0 || u.getWeightKg() <= 0) {
+            return "-";
+        }
+        double heightM = u.getHeightCm() / 100.0;
+        double bmi = u.getWeightKg() / (heightM * heightM);
+        String category;
+        if (bmi < 18.0) {
+            category = "Underweight";
+        } else if (bmi < 25.0) {
+            category = "Normal";
+        } else if (bmi < 30.0) {
+            category = "Overweight";
+        } else {
+            category = "Obese";
+        }
+        return String.format(Locale.ROOT, "%.1f (%s)", bmi, category);
     }
 
     private String viewProfileEdit(List<Line> body) {
@@ -4626,6 +5804,614 @@ public final class LifeForge implements Model {
         return "Full control panel";
     }
 
+    private static String stripAnsi(String s) {
+        if (s == null) return "";
+        return s.replaceAll("\u001B\\[[;\\d]*[ -/]*[@-~]", "");
+    }
+
+    private static int visibleWidth(String s) {
+        return Theme.width(stripAnsi(s));
+    }
+
+    private static String adminRow(String content, int inner, Style frameStyle) {
+        String safe = content == null ? "" : content;
+        int w = visibleWidth(safe);
+        if (w > inner) {
+            safe = Theme.truncate(stripAnsi(safe), inner);
+            w = visibleWidth(safe);
+        }
+        int pad = Math.max(0, inner - w);
+        return Theme.render(frameStyle, "│") + safe + " ".repeat(pad) + Theme.render(frameStyle, "│");
+    }
+
+    static String padLine(String content, int fw, Style frameStyle) {
+        String safe = (content == null) ? "" : content;
+        int maxContent = Math.max(0, fw - 5);
+        int visW = visibleWidth(safe);
+        if (visW > maxContent) {
+            safe = Theme.truncate(stripAnsi(safe), maxContent);
+            visW = visibleWidth(safe);
+        }
+        int pad = Math.max(0, maxContent - visW);
+        return Theme.render(frameStyle, "│  ") + safe + " ".repeat(pad) + Theme.render(frameStyle, " │");
+    }
+
+    static String padLine(String content, int fw) {
+        return padLine(content, fw, Theme.adminBorder());
+    }
+
+    private static String adminDivider(int inner, Style frameStyle) {
+        return Theme.render(frameStyle, "├" + "─".repeat(inner) + "┤");
+    }
+
+    private static String adminSectionDivider(String label, int inner, Style frameStyle, Style labelStyle) {
+        String prefix = "├─ ";
+        int labelW = Theme.width(label);
+        int suffixDashes = Math.max(0, inner - (2 + labelW + 1));
+        return Theme.render(frameStyle, prefix)
+                + Theme.render(labelStyle, label)
+                + Theme.render(frameStyle, " " + "─".repeat(suffixDashes) + "┤");
+    }
+
+    Set<Long> getInactiveRecIds() {
+        return inactiveRecIds;
+    }
+
+    public String getAdminRecSearchQuery() {
+        return recommendationSearchQuery;
+    }
+
+    public void setAdminRecSearchQuery(String query) {
+        this.recommendationSearchQuery = (query == null) ? "" : query;
+        this.recSearchQueryText = this.recommendationSearchQuery;
+    }
+
+    public int getAdminRecCurrentPage() {
+        return recPage;
+    }
+
+    public void setAdminRecCurrentPage(int page) {
+        this.recPage = page;
+    }
+
+    public void resetAdminRecSearch() {
+        this.recommendationSearchQuery = "";
+        this.recSearchQueryText = "";
+        this.recPage = 0;
+        this.sel = 0;
+        refreshAdminRecs();
+    }
+
+    public List<Goal> getGoals() {
+        return goals;
+    }
+
+    public void setGoals(List<Goal> goals) {
+        this.goals = goals;
+    }
+
+    public List<RecommendationCategory> getCatList() {
+        return catList;
+    }
+
+    public void setCatList(List<RecommendationCategory> catList) {
+        this.catList = catList;
+    }
+
+    public Set<Long> getInactiveCatIds() {
+        return inactiveCatIds;
+    }
+
+    private static boolean isRecScreen(Screen s) {
+        return s == Screen.ADMIN_RECS
+                || s == Screen.ADMIN_REC_SEARCH
+                || s == Screen.ADMIN_REC_DETAIL
+                || s == Screen.ADMIN_REC_FORM
+                || s == Screen.ADMIN_REC_DELETE_CONFIRM;
+    }
+
+    String renderAdminRecsPage(int fw) {
+        int inner = fw - 2;
+        List<String> lines = new ArrayList<>();
+        Style frameStyle = Theme.adminBorder();
+
+        if (displayedRecs == null) {
+            refreshAdminRecs();
+        }
+
+        int totalAll = displayedRecs == null ? 0 : displayedRecs.size();
+        int totalPages = Math.max(1, (int) Math.ceil((double) totalAll / recPageSize));
+        if (recPage < 0) recPage = 0;
+        if (recPage >= totalPages) recPage = totalPages - 1;
+
+        int pageStart = recPage * recPageSize;
+        int pageEnd = Math.min(pageStart + recPageSize, totalAll);
+        int pageRows = pageEnd - pageStart;
+        if (sel >= pageRows && pageRows > 0) {
+            sel = pageRows - 1;
+        }
+
+        // 1. Top outer border
+        String titleRaw = "┌─ 🛠️ LIFEForge / RECOMMENDATION CMS (Admin) ";
+        int usedW = Theme.width(titleRaw);
+        int dashCount = Math.max(0, (inner + 2) - usedW - 1);
+        String topBorder = Theme.render(frameStyle, "┌─ ")
+                + "🛠️ "
+                + Theme.render(Theme.adminHeader(), "LIFEForge")
+                + Theme.render(Theme.dim(), " / ")
+                + Theme.render(Theme.adminHeaderSub(), "RECOMMENDATION CMS (Admin)")
+                + Theme.render(frameStyle, " " + "─".repeat(dashCount) + "┐");
+        lines.add(topBorder);
+
+        // 2. Search row
+        String searchVal = (recommendationSearchQuery != null) ? recommendationSearchQuery : "";
+        String rightPart = "] (" + totalAll + ") ";
+        int searchBoxW = Math.max(10, inner - 11 - Theme.width(rightPart));
+        String searchDisplay = Theme.padRight(searchVal, searchBoxW);
+        String searchInner = "  " + Theme.render(Theme.adminHeader(), "Search: ")
+                + Theme.render(frameStyle, "[")
+                + (searchVal.isEmpty() ? searchDisplay : Theme.render(Theme.adminBadgeYellow(), searchDisplay))
+                + Theme.render(frameStyle, "]")
+                + Theme.render(Theme.adminDim(), " (" + totalAll + ") ");
+        lines.add(adminRow(searchInner, inner, frameStyle));
+
+        // 3. Grid Table
+        int idW = 6;
+        int goalW = 16;
+        int targetW = 12;
+        int statW = 8;
+        int flex = inner - (idW + 1 + goalW + 1 + targetW + 1 + statW + 1);
+        int titleW = Math.max(20, flex);
+
+        // Top table divider
+        String topTableDiv = Theme.render(frameStyle, "├" + "─".repeat(idW) + "┬" + "─".repeat(titleW) + "┬" + "─".repeat(goalW) + "┬" + "─".repeat(targetW) + "┬" + "─".repeat(statW) + "┤");
+        lines.add(topTableDiv);
+
+        // Header row
+        String hId = Theme.padRight(" ID", idW);
+        String hTitle = Theme.padRight(" RECOMMENDATION TITLE", titleW);
+        String hGoal = Theme.padRight(" GOAL", goalW);
+        String hTarget = Theme.padRight(" TARGET", targetW);
+        String hStat = Theme.padRight("  STAT", statW);
+        String headerRow = Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hId)
+                + Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hTitle)
+                + Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hGoal)
+                + Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hTarget)
+                + Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hStat)
+                + Theme.render(frameStyle, "│");
+        lines.add(headerRow);
+
+        // Header divider
+        String headerDiv = Theme.render(frameStyle, "├" + "─".repeat(idW) + "┼" + "─".repeat(titleW) + "┼" + "─".repeat(goalW) + "┼" + "─".repeat(targetW) + "┼" + "─".repeat(statW) + "┤");
+        lines.add(headerDiv);
+
+        // Data rows (8 rows)
+        for (int i = 0; i < recPageSize; i++) {
+            int globalIdx = pageStart + i;
+            if (globalIdx < pageEnd && displayedRecs != null) {
+                Recommendation r = displayedRecs.get(globalIdx);
+                boolean isSel = (i == sel);
+                boolean isActive = !inactiveRecIds.contains(r.getId());
+
+                String idRaw = (isSel ? ">#" : " #") + r.getId();
+                String idPadded = Theme.padRight(idRaw, idW);
+
+                String recTitleRaw = " " + Theme.truncate(r.getTitle(), titleW - 2);
+                String titlePadded = Theme.padRight(recTitleRaw, titleW);
+
+                String goalRaw = " " + Theme.truncate(nameOfGoal(r.getGoalId()), goalW - 2);
+                String goalPadded = Theme.padRight(goalRaw, goalW);
+
+                String targetStr = (r.getSuggestedTarget() != null && !r.getSuggestedTarget().isBlank()) ? r.getSuggestedTarget() : "-";
+                String targetRaw = " " + Theme.truncate(targetStr, targetW - 2);
+                String targetPadded = Theme.padRight(targetRaw, targetW);
+
+                String statText = isActive ? "ACT" : "INA";
+                String statRaw = "  " + statText;
+                String statPadded = Theme.padRight(statRaw, statW);
+
+                String cId, cTitle, cGoal, cTarget, cStat;
+                if (isSel) {
+                    cId = Theme.render(Theme.rowSelectedId(), idPadded);
+                    cTitle = Theme.render(Theme.rowSelected(), titlePadded);
+                    cGoal = Theme.render(Theme.rowSelectedDim(), goalPadded);
+                    cTarget = Theme.render(Theme.rowSelected(), targetPadded);
+                    cStat = Theme.render(isActive ? Theme.rowSelectedDotActive() : Theme.rowSelectedBadgeRed(), statPadded);
+                } else {
+                    cId = Theme.render(Theme.adminDim(), idPadded);
+                    cTitle = Theme.render(Theme.adminText(), titlePadded);
+                    cGoal = Theme.render(Theme.adminDim(), goalPadded);
+                    cTarget = Theme.render(Theme.adminText(), targetPadded);
+                    cStat = Theme.render(isActive ? Theme.ok() : Theme.warn(), statPadded);
+                }
+
+                String row = Theme.render(frameStyle, "│") + cId
+                        + Theme.render(frameStyle, "│") + cTitle
+                        + Theme.render(frameStyle, "│") + cGoal
+                        + Theme.render(frameStyle, "│") + cTarget
+                        + Theme.render(frameStyle, "│") + cStat
+                        + Theme.render(frameStyle, "│");
+                lines.add(row);
+            } else {
+                String emptyRow = Theme.render(frameStyle, "│") + " ".repeat(idW)
+                        + Theme.render(frameStyle, "│") + " ".repeat(titleW)
+                        + Theme.render(frameStyle, "│") + " ".repeat(goalW)
+                        + Theme.render(frameStyle, "│") + " ".repeat(targetW)
+                        + Theme.render(frameStyle, "│") + " ".repeat(statW)
+                        + Theme.render(frameStyle, "│");
+                lines.add(emptyRow);
+            }
+        }
+
+        // Bottom table divider
+        String botTableDiv = Theme.render(frameStyle, "├" + "─".repeat(idW) + "┴" + "─".repeat(titleW) + "┴" + "─".repeat(goalW) + "┴" + "─".repeat(targetW) + "┴" + "─".repeat(statW) + "┤");
+        lines.add(botTableDiv);
+
+        // 4. Summary & Pagination row
+        int startNum = totalAll == 0 ? 0 : pageStart + 1;
+        int endNum = pageEnd;
+        String summaryLeft = "  Showing " + startNum + "-" + endNum + " of " + totalAll;
+        String summaryRight = "[←/→] Page " + (recPage + 1) + " of " + totalPages + "   ";
+        int sGap = Math.max(1, inner - Theme.width(summaryLeft) - Theme.width(summaryRight));
+        String summaryRow = Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminDim(), summaryLeft)
+                + " ".repeat(sGap)
+                + Theme.render(Theme.adminDim(), summaryRight)
+                + Theme.render(frameStyle, "│");
+        lines.add(summaryRow);
+
+        // 5. Footer divider
+        lines.add(adminDivider(inner, frameStyle));
+
+        // 6. Action hints inside card
+        StringBuilder hints = new StringBuilder("  ");
+        boolean hasFilter = recommendationSearchQuery != null && !recommendationSearchQuery.isEmpty();
+        String gap = hasFilter ? "   " : "    ";
+        hints.append(Theme.render(Theme.adminBadgeKey(), "↑↓")).append(Theme.render(Theme.adminText(), " Select" + gap));
+        hints.append(Theme.render(Theme.adminBadgeKey(), "Enter")).append(Theme.render(Theme.adminText(), " Edit" + gap));
+        hints.append(Theme.render(Theme.adminBadgeGreen(), "N")).append(Theme.render(Theme.adminText(), " New" + gap));
+        hints.append(Theme.render(Theme.adminBadgeKey(), "S")).append(Theme.render(Theme.adminText(), " Search" + gap));
+        if (hasFilter) {
+            hints.append(Theme.render(Theme.adminBadgeYellow(), "C")).append(Theme.render(Theme.adminText(), " Clear" + gap));
+        }
+        hints.append(Theme.render(Theme.adminBadgeRed(), "D")).append(Theme.render(Theme.adminText(), " Delete" + gap));
+        hints.append(Theme.render(Theme.adminBadgePurple(), "B")).append(Theme.render(Theme.adminText(), " Back" + gap));
+        hints.append(Theme.render(Theme.adminBadgeRed(), "Q")).append(Theme.render(Theme.adminText(), " Quit"));
+        lines.add(adminRow(hints.toString(), inner, frameStyle));
+
+        // 7. Status line (if any)
+        if (status != null && !status.isEmpty()) {
+            Style st = statusErr ? Theme.err() : Theme.ok();
+            String prefix = statusErr ? " ERROR: " : " OK: ";
+            lines.add(adminRow("  " + Theme.render(st, prefix + status), inner, frameStyle));
+        }
+
+        // 8. Bottom card border
+        lines.add(Theme.render(frameStyle, "└" + "─".repeat(inner) + "┘"));
+
+        return String.join("\n", lines);
+    }
+
+    String renderAdminRecDetailPage(int fw) {
+        int inner = fw - 2;
+        List<String> lines = new ArrayList<>();
+        Style frameStyle = Theme.adminBorder();
+
+        lines.add("\u001B[H\u001B[2J");
+
+        Recommendation r = findRecById(editRecId);
+
+        String idLabel = (r != null ? String.valueOf(r.getId()) : String.valueOf(editRecId));
+        String titleRaw = "┌─ 💡 RECOMMENDATION DETAIL [#" + idLabel + "] ";
+        int usedW = Theme.width(titleRaw);
+        int dashCount = Math.max(0, fw - usedW - 1);
+        String topBorder = Theme.render(frameStyle, "┌─ ")
+                + "💡 "
+                + Theme.render(Theme.adminHeader(), "RECOMMENDATION DETAIL [#" + idLabel + "]")
+                + Theme.render(frameStyle, " " + "─".repeat(dashCount) + "┐");
+        lines.add(topBorder);
+
+        if (r == null) {
+            lines.add(padLine("", fw, frameStyle));
+            lines.add(padLine(Theme.render(Theme.warn(), "This recommendation no longer exists."), fw, frameStyle));
+            lines.add(padLine(Theme.render(Theme.dim(), "Press B or ESC to return to the CMS list."), fw, frameStyle));
+            lines.add(padLine("", fw, frameStyle));
+            lines.add(adminDivider(inner, frameStyle));
+            lines.add(padLine(Theme.render(Theme.adminBadgePurple(), "[ESC/B]") + Theme.render(Theme.adminText(), " Back to CMS"), fw, frameStyle));
+            lines.add(Theme.render(frameStyle, "└" + "─".repeat(inner) + "┘"));
+            return String.join("\n", lines);
+        }
+
+        // Section 1: BASIC METADATA
+        lines.add(padLine("", fw, frameStyle));
+        lines.add(padLine(Theme.render(Theme.adminHeaderSub(), "📋 BASIC METADATA"), fw, frameStyle));
+        lines.add(padLine("", fw, frameStyle));
+
+        String goalName = nameOfGoal(r.getGoalId());
+        lines.add(padLine("• " + Theme.render(Theme.adminDim(), "Goal           : ") + Theme.render(Theme.pivot(), goalName), fw, frameStyle));
+
+        String catName = nameOfCategory(r.getCategoryId());
+        lines.add(padLine("• " + Theme.render(Theme.adminDim(), "Category       : ") + Theme.render(Theme.adminText(), catName), fw, frameStyle));
+
+        String act = r.getActivityLevel() == null ? "ALL" : human(r.getActivityLevel());
+        lines.add(padLine("• " + Theme.render(Theme.adminDim(), "Activity Level : ") + Theme.render(Theme.adminText(), act), fw, frameStyle));
+
+        boolean isActive = !inactiveRecIds.contains(r.getId());
+        String statText = isActive ? "● Active" : "● Inactive";
+        Style statStyle = isActive ? Theme.ok() : Theme.warn();
+        lines.add(padLine("• " + Theme.render(Theme.adminDim(), "Status         : ") + Theme.render(statStyle, statText), fw, frameStyle));
+        lines.add(padLine("", fw, frameStyle));
+
+        // Section 2: CONTENT
+        lines.add(adminSectionDivider("📝 CONTENT", inner, frameStyle, Theme.adminHeaderSub()));
+        lines.add(padLine("", fw, frameStyle));
+
+        String titleVal = nvl(r.getTitle());
+        List<String> tLines = Theme.wrap(titleVal, 59);
+        for (int i = 0; i < tLines.size(); i++) {
+            String pfx = (i == 0) ? "Title:          " : "                ";
+            lines.add(padLine(pfx + Theme.render(Theme.headingGreen(), tLines.get(i)), fw, frameStyle));
+        }
+
+        String descVal = r.getDescription();
+        if (descVal != null && !descVal.isBlank()) {
+            lines.add(padLine("", fw, frameStyle));
+            lines.add(padLine(Theme.render(Theme.adminDim(), "Description:"), fw, frameStyle));
+            for (String dLine : Theme.wrap(descVal, 71)) {
+                lines.add(padLine("  " + Theme.render(Theme.adminText(), dLine), fw, frameStyle));
+            }
+        }
+        lines.add(padLine("", fw, frameStyle));
+
+        // Section 3: GUIDANCE SPECIFICATIONS
+        lines.add(adminSectionDivider("🎯 GUIDANCE SPECIFICATIONS", inner, frameStyle, Theme.adminHeaderSub()));
+        lines.add(padLine("", fw, frameStyle));
+
+        String actionsVal = r.getRecommendedActions();
+        if (actionsVal != null && !actionsVal.isBlank()) {
+            lines.add(padLine(Theme.render(Theme.adminDim(), "Recommended Actions:"), fw, frameStyle));
+            for (String aLine : Theme.wrap(actionsVal, 71)) {
+                lines.add(padLine("  " + Theme.render(Theme.adminText(), aLine), fw, frameStyle));
+            }
+            lines.add(padLine("", fw, frameStyle));
+        }
+
+        String targetVal = (r.getSuggestedTarget() != null && !r.getSuggestedTarget().isBlank()) ? r.getSuggestedTarget() : "-";
+        List<String> targetLines = Theme.wrap(targetVal, 54);
+        for (int i = 0; i < targetLines.size(); i++) {
+            String pfx = (i == 0) ? Theme.render(Theme.adminDim(), "Suggested Target:   ") : "                    ";
+            lines.add(padLine(pfx + Theme.render(Theme.pivot(), targetLines.get(i)), fw, frameStyle));
+        }
+
+        String notesVal = r.getImportantNotes();
+        if (notesVal != null && !notesVal.isBlank()) {
+            lines.add(padLine("", fw, frameStyle));
+            lines.add(padLine(Theme.render(Theme.adminDim(), "Important Notes:"), fw, frameStyle));
+            for (String nLine : Theme.wrap(notesVal, 71)) {
+                lines.add(padLine("  " + Theme.render(Theme.warn(), nLine), fw, frameStyle));
+            }
+        }
+        lines.add(padLine("", fw, frameStyle));
+
+        if (status != null && !status.isEmpty()) {
+            Style st = statusErr ? Theme.err() : Theme.ok();
+            String prefix = statusErr ? "ERROR: " : "OK: ";
+            lines.add(padLine(Theme.render(st, prefix + status), fw, frameStyle));
+            lines.add(padLine("", fw, frameStyle));
+        }
+
+        // Action footer
+        lines.add(adminDivider(inner, frameStyle));
+        String fEdit = Theme.render(Theme.adminBadgeKey(), "[E]") + Theme.render(Theme.adminText(), " Edit Fields");
+        String fToggle = Theme.render(Theme.adminBadgeGreen(), "[T]") + Theme.render(Theme.adminText(), " Toggle Status");
+        String fDel = Theme.render(Theme.adminBadgeRed(), "[D]") + Theme.render(Theme.adminText(), " Delete");
+        String fBack = Theme.render(Theme.adminBadgePurple(), "[ESC/B]") + Theme.render(Theme.adminText(), " Back to CMS");
+        String footerContent = fEdit + "    " + fToggle + "    " + fDel + "    " + fBack;
+        lines.add(padLine(footerContent, fw, frameStyle));
+        lines.add(Theme.render(frameStyle, "└" + "─".repeat(inner) + "┘"));
+
+        return String.join("\n", lines);
+    }
+
+    private String renderAdminUsersPage(int fw) {
+        int inner = fw - 2;
+        List<String> lines = new ArrayList<>();
+        Style frameStyle = Theme.adminBorder();
+
+        // Filter out ADMIN accounts from display
+        List<User> displayUsers = new ArrayList<>();
+        if (users != null) {
+            for (User u : users) {
+                if (u.getRole() != Role.ADMIN) {
+                    displayUsers.add(u);
+                }
+            }
+        }
+        int totalUsers = displayUsers.size();
+        int pageSize = ADMIN_USERS_PAGE_SIZE;
+        int totalPages = Math.max(1, (int) Math.ceil((double) totalUsers / pageSize));
+        int curPage = Math.max(0, Math.min(userPage, totalPages - 1));
+        int pageStart = curPage * pageSize;
+        int pageEnd = Math.min(pageStart + pageSize, totalUsers);
+        int pageRows = pageEnd - pageStart;
+        int curSel = Math.max(0, Math.min(sel, Math.max(0, pageRows - 1)));
+        User currentSelUser = (pageRows > 0 && curSel >= 0 && (pageStart + curSel) < totalUsers)
+                ? displayUsers.get(pageStart + curSel)
+                : null;
+
+        // 1. Top outer border (square corners)
+        lines.add(Theme.render(frameStyle, "┌" + "─".repeat(inner) + "┐"));
+
+        // 2. Header
+        String headLeft = "  " + Theme.render(Theme.adminHeader(), "LIFEForge")
+                + Theme.render(Theme.dim(), "  /  ")
+                + Theme.render(Theme.adminHeaderSub(), "ADMIN / USER MANAGEMENT");
+        String headRight = Theme.render(Theme.adminHeader(), "👤 Admin") + "   ";
+        int hGap = Math.max(1, inner - visibleWidth(headLeft) - visibleWidth(headRight));
+        lines.add(adminRow(headLeft + " ".repeat(hGap) + headRight, inner, frameStyle));
+
+        String sub = "  " + Theme.render(Theme.dim(), "Manage and maintain registered users");
+        lines.add(adminRow(sub, inner, frameStyle));
+
+        // Header Divider
+        lines.add(adminDivider(inner, frameStyle));
+
+        // 3. Toolbar
+        String totalStr = "  " + Theme.render(Theme.dim(), "Total Users: ")
+                + Theme.render(Theme.adminHeader(), String.valueOf(totalUsers));
+        if (!searchQuery.isEmpty()) {
+            totalStr += "    " + Theme.render(Theme.adminBadgeYellow(), "Filter: \"" + searchQuery + "\"");
+        }
+        lines.add(adminRow(totalStr, inner, frameStyle));
+        lines.add(adminRow("", inner, frameStyle));
+
+        String toolsStr;
+        if (!searchQuery.isEmpty()) {
+            toolsStr = "  " + Theme.render(Theme.adminBadgeYellow(), "[X]") + Theme.render(Theme.adminText(), " Clear Filter")
+                    + "        " + Theme.render(Theme.adminBadgeKey(), "[↑↓]") + Theme.render(Theme.adminText(), " Select")
+                    + "        " + Theme.render(Theme.adminBadgeKey(), "[←→]") + Theme.render(Theme.adminText(), " Page");
+        } else {
+            toolsStr = "  " + Theme.render(Theme.adminBadgeGreen(), "[S]") + Theme.render(Theme.adminText(), " Search")
+                    + "        " + Theme.render(Theme.adminBadgeKey(), "[↑↓]") + Theme.render(Theme.adminText(), " Select")
+                    + "        " + Theme.render(Theme.adminBadgeKey(), "[←→]") + Theme.render(Theme.adminText(), " Page");
+        }
+        lines.add(adminRow(toolsStr, inner, frameStyle));
+        lines.add(adminRow("", inner, frameStyle));
+
+        // 4. User Table
+        int idW = 8;
+        int statusW = 12;
+        int flex = Math.max(28, inner - (2 + idW + statusW));
+        int nameW = flex * 44 / 100;
+        int emailW = flex - nameW;
+
+        String hId = Theme.padRight("ID", idW);
+        String hName = Theme.padRight("NAME", nameW);
+        String hEmail = Theme.padRight("EMAIL", emailW);
+        String hStatus = Theme.padRight("STATUS", statusW);
+        lines.add(adminRow("  " + Theme.render(Theme.adminHeader(), hId + hName + hEmail + hStatus), inner, frameStyle));
+
+        String uId = Theme.padRight("──────", idW);
+        String uName = Theme.padRight("─".repeat(Math.max(4, nameW - 4)), nameW);
+        String uEmail = Theme.padRight("─".repeat(Math.max(4, emailW - 4)), emailW);
+        String uStatus = Theme.padRight("─────────", statusW);
+        lines.add(adminRow("  " + Theme.render(Theme.dim(), uId + uName + uEmail + uStatus), inner, frameStyle));
+
+        if (pageRows == 0) {
+            lines.add(adminRow("  " + Theme.render(Theme.adminDim(), "No users found."), inner, frameStyle));
+            for (int r = 1; r < pageSize; r++) {
+                lines.add(adminRow("", inner, frameStyle));
+            }
+        } else {
+            for (int i = pageStart; i < pageEnd; i++) {
+                User u = displayUsers.get(i);
+                boolean isSel = (i - pageStart) == curSel;
+                String indicator = isSel ? "> " : "  ";
+                String idRaw = "#" + u.getId();
+                String nameRaw = Theme.truncate(u.getFullName(), nameW - 2);
+                String emailRaw = Theme.truncate(u.getEmail(), emailW - 2);
+                String statusDot = "●";
+                String statusText = u.isBlocked() ? "Blocked" : "Active";
+
+                String indCol = isSel ? Theme.render(Theme.rowSelectedBadgeKey(), indicator) : indicator;
+                String idPadded = Theme.padRight(idRaw, idW);
+                String idCol = isSel ? Theme.render(Theme.rowSelectedId(), idPadded) : Theme.render(Theme.adminHeader(), idPadded);
+                String namePadded = Theme.padRight(nameRaw, nameW);
+                String nameCol = isSel ? Theme.render(Theme.rowSelected(), namePadded) : Theme.render(Theme.adminText(), namePadded);
+                String emailPadded = Theme.padRight(emailRaw, emailW);
+                String emailCol = isSel ? Theme.render(Theme.rowSelectedDim(), emailPadded) : Theme.render(Theme.adminDim(), emailPadded);
+
+                int statUsed = Theme.width(statusDot) + 1 + Theme.width(statusText);
+                int statPad = Math.max(0, statusW - statUsed);
+                String padSpaces = " ".repeat(statPad);
+
+                String dotCol = isSel
+                        ? (u.isBlocked()
+                                ? Theme.render(Theme.err().background(Theme.ADMIN_SELECT_BG), statusDot)
+                                : Theme.render(Theme.rowSelectedDotActive(), statusDot))
+                        : (u.isBlocked()
+                                ? Theme.render(Theme.err(), statusDot)
+                                : Theme.render(Theme.adminDotActive(), statusDot));
+                String statTextCol = isSel
+                        ? Theme.render(Theme.rowSelected(), " " + statusText)
+                        : Theme.render(Theme.adminText(), " " + statusText);
+                String padCol = isSel
+                        ? Theme.render(Theme.rowSelected(), padSpaces)
+                        : padSpaces;
+                String statusCol = dotCol + statTextCol + padCol;
+
+                lines.add(adminRow(indCol + idCol + nameCol + emailCol + statusCol, inner, frameStyle));
+            }
+            for (int r = pageRows; r < pageSize; r++) {
+                lines.add(adminRow("", inner, frameStyle));
+            }
+        }
+        lines.add(adminRow("", inner, frameStyle));
+
+        // 5. Selected User Actions
+        if (currentSelUser != null) {
+            lines.add(adminRow("  " + Theme.render(Theme.adminHeader(), "SELECTED USER"), inner, frameStyle));
+            String statusBadge = currentSelUser.isBlocked() ? "Blocked" : "Active";
+            String info = currentSelUser.getFullName() + "  ·  " + currentSelUser.getEmail() + "  ·  " + statusBadge;
+            lines.add(adminRow("  " + Theme.render(Theme.adminText(), info), inner, frameStyle));
+            lines.add(adminRow("", inner, frameStyle));
+
+            String blockLabel = currentSelUser.isBlocked() ? "Unblock User" : "Block User";
+            String actLine = "  " + Theme.render(Theme.adminBadgeKey(), "[V]") + Theme.render(Theme.adminText(), " View Details    ")
+                    + Theme.render(Theme.adminBadgePurple(), "[B]") + Theme.render(Theme.adminText(), " " + blockLabel + "    ")
+                    + Theme.render(Theme.adminBadgeRed(), "[D]") + Theme.render(Theme.adminText(), " Delete User");
+            lines.add(adminRow(actLine, inner, frameStyle));
+        } else {
+            lines.add(adminRow("  " + Theme.render(Theme.adminDim(), "SELECTED USER"), inner, frameStyle));
+            lines.add(adminRow("  " + Theme.render(Theme.adminDim(), "No user selected"), inner, frameStyle));
+            lines.add(adminRow("", inner, frameStyle));
+            lines.add(adminRow("", inner, frameStyle));
+        }
+        lines.add(adminRow("", inner, frameStyle));
+
+        // 6. Pagination
+        String pageLeft = String.format("Page %d / %d", curPage + 1, totalPages);
+        int startNum = totalUsers == 0 ? 0 : pageStart + 1;
+        int endNum = pageEnd;
+        String pageRight = String.format("Showing %d–%d of %d users", startNum, endNum, totalUsers);
+        int pLeftW = Theme.width(pageLeft);
+        int pRightW = Theme.width(pageRight);
+        int pGap = Math.max(1, (inner - 4) - pLeftW - pRightW);
+        String pageLine = "  " + Theme.render(Theme.adminDim(), pageLeft) + " ".repeat(pGap) + Theme.render(Theme.adminDim(), pageRight);
+        lines.add(adminRow(pageLine, inner, frameStyle));
+
+        // 7. Optional Status Row
+        if (status != null && !status.isEmpty()) {
+            Style st = statusErr ? Theme.err() : Theme.ok();
+            String prefix = statusErr ? "ERROR: " : "OK: ";
+            lines.add(adminRow("  " + Theme.render(st, prefix + status), inner, frameStyle));
+        }
+
+        // 8. Footer Divider and Footer
+        lines.add(adminDivider(inner, frameStyle));
+
+        String fSel = Theme.render(Theme.adminBadgeKey(), "↑↓") + Theme.render(Theme.adminText(), " Select");
+        String fPage = Theme.render(Theme.adminBadgeKey(), "←→") + Theme.render(Theme.adminText(), " Page");
+        String fSearch = Theme.render(Theme.adminBadgeGreen(), "S") + Theme.render(Theme.adminText(), " Search");
+        String fClear = Theme.render(Theme.adminBadgeYellow(), "X") + Theme.render(Theme.adminText(), " Clear");
+        String fBack = Theme.render(Theme.adminBadgePurple(), "B") + Theme.render(Theme.adminText(), " Back");
+        String fHome = Theme.render(Theme.adminBadgeKey(), "H") + Theme.render(Theme.adminText(), " Home");
+        String fQuit = Theme.render(Theme.adminBadgeRed(), "Q") + Theme.render(Theme.adminText(), " Quit");
+
+        String footerContent = "  " + fSel + "    " + fPage + "    " + fSearch + "    " + fClear + "    " + fBack + "    " + fHome + "    " + fQuit;
+        lines.add(adminRow(footerContent, inner, frameStyle));
+
+        // 9. Bottom outer border
+        lines.add(Theme.render(frameStyle, "└" + "─".repeat(inner) + "┘"));
+
+        return String.join("\n", lines);
+    }
+
     private String viewAdminUsers(List<Line> body) {
         if (!searchQuery.isEmpty()) {
             body.add(Line.of(Theme.pivot(), "  Filter: \"" + searchQuery + "\""));
@@ -4636,19 +6422,22 @@ public final class LifeForge implements Model {
         }
         body.add(Line.blank());
 
+        int pageSize = 5;
         int totalAll = users == null ? 0 : users.size();
-        int pageStart = userPage * userPageSize;
-        int pageEnd = Math.min(pageStart + userPageSize, totalAll);
+        int pageStart = userPage * pageSize;
+        int pageEnd = Math.min(pageStart + pageSize, totalAll);
 
-        String[] headers = { "ID", "NAME", "EMAIL", "STATUS" };
-        String[][] rows = new String[pageEnd - pageStart][4];
+        String[] headers = { "ID", "NAME", "EMAIL", "STATUS", "ROLE", "ACTIONS" };
+        String[][] rows = new String[pageEnd - pageStart][6];
         for (int i = pageStart; i < pageEnd; i++) {
             User u = users.get(i);
             String id = "#" + u.getId();
             String name = u.getFullName();
             String email = u.getEmail();
             String status = u.isBlocked() ? "\uD83D\uDD12 Blocked" : "\u25CF Active";
-            rows[i - pageStart] = new String[] { id, name, email, status };
+            String role = u.getRole().name();
+            String actions = "[👁] [✏] [🗑]";
+            rows[i - pageStart] = new String[] { id, name, email, status, role, actions };
         }
 
         body.addAll(flatTable(headers, rows, Math.max(0, sel), width - 4));
@@ -4656,7 +6445,7 @@ public final class LifeForge implements Model {
         if (totalAll > 0) {
             body.add(Line.of(Theme.dim(), String.format(
                     "  Page %d/%d   \u2014   %s%d user(s)%s",
-                    userPage + 1, Math.max(1, (int) Math.ceil((double) totalAll / userPageSize)),
+                    userPage + 1, Math.max(1, (int) Math.ceil((double) totalAll / pageSize)),
                     searchQuery.isEmpty() ? "" : "filtered ", totalAll,
                     searchQuery.isEmpty() ? "" : " total")));
         }
@@ -4864,13 +6653,818 @@ public final class LifeForge implements Model {
         return "Delete confirmation required";
     }
 
-    private List<Line> addDetailSectionLines(List<Line> body, String label, String value, int inner) {
+    List<Line> addDetailSectionLines(List<Line> body, String label, String value, int inner) {
+        List<Line> sectionLines = new ArrayList<>();
         if (value != null && !value.isBlank()) {
-            body.add(Line.blank());
-            body.add(Line.of(Theme.headingCyan(), "  \u270F " + label));
-            body.addAll(ScreenKit.paragraph(value, inner));
+            sectionLines.add(Line.blank());
+            sectionLines.add(Line.of(Theme.headingCyan(), "  \u270F " + label));
+            sectionLines.addAll(ScreenKit.paragraph(value, inner));
         }
-        return body;
+        return sectionLines;
+    }
+
+    String renderAdminGoalsPage(int fw) {
+        int inner = fw - 2;
+        List<String> lines = new ArrayList<>();
+        Style frameStyle = Theme.adminBorder();
+
+        if (goals == null) {
+            refreshAdminGoals();
+        }
+
+        int totalAll = goals == null ? 0 : goals.size();
+        int pageSize = userPageSize;
+        int totalPages = Math.max(1, (int) Math.ceil((double) totalAll / pageSize));
+        if (userPage < 0) userPage = 0;
+        if (userPage >= totalPages) userPage = totalPages - 1;
+
+        int pageStart = userPage * pageSize;
+        int pageEnd = Math.min(pageStart + pageSize, totalAll);
+        int pageRows = pageEnd - pageStart;
+        if (sel >= pageRows && pageRows > 0) {
+            sel = pageRows - 1;
+        }
+
+        // 1. Top outer border
+        String titleRaw = "┌─ 🎯 LIFEForge / GOAL MANAGEMENT (Admin) ";
+        int usedW = Theme.width(titleRaw);
+        int dashCount = Math.max(0, (inner + 2) - usedW - 1);
+        String topBorder = Theme.render(frameStyle, "┌─ ")
+                + "🎯 "
+                + Theme.render(Theme.adminHeader(), "LIFEForge")
+                + Theme.render(Theme.dim(), " / ")
+                + Theme.render(Theme.adminHeaderSub(), "GOAL MANAGEMENT (Admin)")
+                + Theme.render(frameStyle, " " + "─".repeat(dashCount) + "┐");
+        lines.add(topBorder);
+
+        // 2. Table Column Widths
+        int idW = 6;
+        int keyW = 17;
+        int statW = 16;
+        int flex = inner - (idW + 1 + keyW + 1 + statW + 1);
+        int nameW = Math.max(30, flex);
+
+        // Top table divider
+        String topTableDiv = Theme.render(frameStyle, "├" + "─".repeat(idW) + "┬" + "─".repeat(nameW) + "┬" + "─".repeat(keyW) + "┬" + "─".repeat(statW) + "┤");
+        lines.add(topTableDiv);
+
+        // Header row
+        String hId = Theme.padRight(" ID", idW);
+        String hName = Theme.padRight(" GOAL NAME", nameW);
+        String hKey = Theme.padRight(" SYSTEM KEY", keyW);
+        String hStat = Theme.padRight(" STATUS", statW);
+        String headerRow = Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hId)
+                + Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hName)
+                + Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hKey)
+                + Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hStat)
+                + Theme.render(frameStyle, "│");
+        lines.add(headerRow);
+
+        // Mid table divider
+        String midTableDiv = Theme.render(frameStyle, "├" + "─".repeat(idW) + "┼" + "─".repeat(nameW) + "┼" + "─".repeat(keyW) + "┼" + "─".repeat(statW) + "┤");
+        lines.add(midTableDiv);
+
+        // Data rows (pageSize = 8)
+        for (int i = 0; i < pageSize; i++) {
+            int globalIdx = pageStart + i;
+            if (globalIdx < pageEnd && goals != null) {
+                Goal g = goals.get(globalIdx);
+                boolean isSel = (i == sel);
+                boolean isActive = g.isActive();
+
+                String idRaw = (isSel ? "> #" : "  #") + g.getId();
+                String idText = Theme.padRight(idRaw, idW);
+
+                String nameRaw = " " + (g.getName() == null ? "" : g.getName());
+                String nameText = Theme.padRight(Theme.truncate(nameRaw, nameW), nameW);
+
+                String codeRaw = " " + (g.getCode() == null ? "" : g.getCode().toUpperCase(Locale.ROOT));
+                String keyText = Theme.padRight(Theme.truncate(codeRaw, keyW), keyW);
+
+                String statIconText = isActive ? " ● Active" : " ○ Inactive";
+                int statIconW = isActive ? 9 : 11;
+                int statPad = Math.max(0, statW - statIconW);
+
+                if (isSel) {
+                    Style bg = Theme.rowSelected();
+                    Style dotSt = isActive ? Theme.rowSelectedDotActive() : Theme.rowSelectedDim();
+                    String rowStr = Theme.render(frameStyle, "│")
+                            + Theme.render(Theme.rowSelectedId(), idText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(bg, nameText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(Theme.rowSelectedDim(), keyText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(dotSt, statIconText)
+                            + Theme.render(bg, " ".repeat(statPad))
+                            + Theme.render(frameStyle, "│");
+                    lines.add(rowStr);
+                } else {
+                    Style statSt = isActive ? Theme.adminBadgeGreen() : Theme.adminDim();
+                    String rowStr = Theme.render(frameStyle, "│")
+                            + Theme.render(Theme.adminDim(), idText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(Theme.adminText(), nameText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(Theme.adminBadgePurple(), keyText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(statSt, statIconText)
+                            + " ".repeat(statPad)
+                            + Theme.render(frameStyle, "│");
+                    lines.add(rowStr);
+                }
+            } else {
+                lines.add(Theme.render(frameStyle, "│")
+                        + " ".repeat(idW)
+                        + Theme.render(frameStyle, "│")
+                        + " ".repeat(nameW)
+                        + Theme.render(frameStyle, "│")
+                        + " ".repeat(keyW)
+                        + Theme.render(frameStyle, "│")
+                        + " ".repeat(statW)
+                        + Theme.render(frameStyle, "│"));
+            }
+        }
+
+        // Bottom table divider
+        String botTableDiv = Theme.render(frameStyle, "├" + "─".repeat(idW) + "┴" + "─".repeat(nameW) + "┴" + "─".repeat(keyW) + "┴" + "─".repeat(statW) + "┤");
+        lines.add(botTableDiv);
+
+        // Summary & Pagination row
+        int startNum = totalAll == 0 ? 0 : pageStart + 1;
+        int endNum = pageEnd;
+        String summaryLeft = "  Showing " + startNum + "-" + endNum + " of " + totalAll;
+        String summaryRight = "[←/→] Page " + (userPage + 1) + " of " + totalPages + "   ";
+        int sGap = Math.max(1, inner - Theme.width(summaryLeft) - Theme.width(summaryRight));
+        String summaryRow = Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminDim(), summaryLeft)
+                + " ".repeat(sGap)
+                + Theme.render(Theme.adminDim(), summaryRight)
+                + Theme.render(frameStyle, "│");
+        lines.add(summaryRow);
+
+        // 5. Footer divider
+        lines.add(adminDivider(inner, frameStyle));
+
+        // 6. Action hints inside card
+        String gap = "    ";
+        String footerLine = "  "
+                + Theme.render(Theme.adminBadgeKey(), "↑↓") + Theme.render(Theme.adminText(), " Select" + gap)
+                + Theme.render(Theme.adminBadgeKey(), "Enter") + Theme.render(Theme.adminText(), " Edit" + gap)
+                + Theme.render(Theme.adminBadgeGreen(), "N") + Theme.render(Theme.adminText(), " New" + gap)
+                + Theme.render(Theme.adminBadgeYellow(), "T") + Theme.render(Theme.adminText(), " Toggle" + gap)
+                + Theme.render(Theme.adminBadgeRed(), "D") + Theme.render(Theme.adminText(), " Delete" + gap)
+                + Theme.render(Theme.adminBadgePurple(), "B") + Theme.render(Theme.adminText(), " Back" + gap)
+                + Theme.render(Theme.adminBadgeRed(), "Q") + Theme.render(Theme.adminText(), " Quit");
+        lines.add(adminRow(footerLine, inner, frameStyle));
+
+        // 7. Status line (if any)
+        if (status != null && !status.isEmpty()) {
+            Style st = statusErr ? Theme.err() : Theme.ok();
+            String prefix = statusErr ? " ERROR: " : " OK: ";
+            lines.add(adminRow("  " + Theme.render(st, prefix + status), inner, frameStyle));
+        }
+
+        // 8. Bottom card border
+        lines.add(Theme.render(frameStyle, "└" + "─".repeat(inner) + "┘"));
+
+        return String.join("\n", lines);
+    }
+
+    String renderAdminCatsPage(int fw) {
+        int inner = fw - 2;
+        List<String> lines = new ArrayList<>();
+        Style frameStyle = Theme.adminBorder();
+
+        if (catList == null) {
+            refreshAdminCats();
+        }
+
+        if (catList != null) {
+            catList.sort(Comparator.comparing(RecommendationCategory::getId, Comparator.nullsLast(Long::compareTo)));
+        }
+
+        int totalAll = catList == null ? 0 : catList.size();
+        int pageSize = userPageSize;
+        int totalPages = Math.max(1, (int) Math.ceil((double) totalAll / pageSize));
+        if (userPage < 0) userPage = 0;
+        if (userPage >= totalPages) userPage = totalPages - 1;
+
+        int pageStart = userPage * pageSize;
+        int pageEnd = Math.min(pageStart + pageSize, totalAll);
+        int pageRows = pageEnd - pageStart;
+        if (sel >= pageRows && pageRows > 0) {
+            sel = pageRows - 1;
+        }
+
+        // 1. Top outer border
+        String titleRaw = "┌─ 📁 LIFEForge / CATEGORY MANAGEMENT (Admin) ";
+        int usedW = Theme.width(titleRaw);
+        int dashCount = Math.max(0, (inner + 2) - usedW - 1);
+        String topBorder = Theme.render(frameStyle, "┌─ ")
+                + "📁 "
+                + Theme.render(Theme.adminHeader(), "LIFEForge")
+                + Theme.render(Theme.dim(), " / ")
+                + Theme.render(Theme.adminHeaderSub(), "CATEGORY MANAGEMENT (Admin)")
+                + Theme.render(frameStyle, " " + "─".repeat(dashCount) + "┐");
+        lines.add(topBorder);
+
+        // 2. Table Column Widths
+        int idW = 6;
+        int parentW = 17;
+        int statW = 16;
+        int flex = inner - (idW + 1 + parentW + 1 + statW + 1);
+        int nameW = Math.max(30, flex);
+
+        // Top table divider
+        String topTableDiv = Theme.render(frameStyle, "├" + "─".repeat(idW) + "┬" + "─".repeat(nameW) + "┬" + "─".repeat(parentW) + "┬" + "─".repeat(statW) + "┤");
+        lines.add(topTableDiv);
+
+        // Header row
+        String hId = Theme.padRight(" ID", idW);
+        String hName = Theme.padRight(" CATEGORY NAME", nameW);
+        String hParent = Theme.padRight(" PARENT GROUP", parentW);
+        String hStat = Theme.padRight(" STATUS", statW);
+        String headerRow = Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hId)
+                + Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hName)
+                + Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hParent)
+                + Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hStat)
+                + Theme.render(frameStyle, "│");
+        lines.add(headerRow);
+
+        // Mid table divider
+        String midTableDiv = Theme.render(frameStyle, "├" + "─".repeat(idW) + "┼" + "─".repeat(nameW) + "┼" + "─".repeat(parentW) + "┼" + "─".repeat(statW) + "┤");
+        lines.add(midTableDiv);
+
+        Map<Long, String> parentNames = new HashMap<>();
+        if (catList != null) {
+            for (RecommendationCategory c : catList) {
+                if (c.getId() != null && c.getName() != null) {
+                    parentNames.put(c.getId(), c.getName());
+                }
+            }
+        }
+
+        // Data rows (pageSize = 8)
+        for (int i = 0; i < pageSize; i++) {
+            int globalIdx = pageStart + i;
+            if (globalIdx < pageEnd && catList != null) {
+                RecommendationCategory c = catList.get(globalIdx);
+                boolean isSel = (i == sel);
+                boolean isActive = !inactiveCatIds.contains(c.getId());
+
+                String idRaw = (isSel ? "> #" : "  #") + c.getId();
+                String idText = Theme.padRight(idRaw, idW);
+
+                String nameRaw = " " + (c.getName() == null ? "" : c.getName());
+                String nameText = Theme.padRight(Theme.truncate(nameRaw, nameW), nameW);
+
+                String parentStr = c.getParentCategoryId() == null
+                        ? "Root (None)"
+                        : parentNames.getOrDefault(c.getParentCategoryId(), "#" + c.getParentCategoryId());
+                String parentRaw = " " + parentStr;
+                String parentText = Theme.padRight(Theme.truncate(parentRaw, parentW), parentW);
+
+                String statIconText = isActive ? " ● Active" : " ○ Inactive";
+                int statIconW = isActive ? 9 : 11;
+                int statPad = Math.max(0, statW - statIconW);
+
+                if (isSel) {
+                    Style bg = Theme.rowSelected();
+                    Style dotSt = isActive ? Theme.rowSelectedDotActive() : Theme.rowSelectedDim();
+                    String rowStr = Theme.render(frameStyle, "│")
+                            + Theme.render(Theme.rowSelectedId(), idText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(bg, nameText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(Theme.rowSelectedDim(), parentText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(dotSt, statIconText)
+                            + Theme.render(bg, " ".repeat(statPad))
+                            + Theme.render(frameStyle, "│");
+                    lines.add(rowStr);
+                } else {
+                    Style statSt = isActive ? Theme.adminBadgeGreen() : Theme.adminDim();
+                    String rowStr = Theme.render(frameStyle, "│")
+                            + Theme.render(Theme.adminDim(), idText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(Theme.adminText(), nameText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(Theme.adminBadgePurple(), parentText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(statSt, statIconText)
+                            + " ".repeat(statPad)
+                            + Theme.render(frameStyle, "│");
+                    lines.add(rowStr);
+                }
+            } else {
+                lines.add(Theme.render(frameStyle, "│")
+                        + " ".repeat(idW)
+                        + Theme.render(frameStyle, "│")
+                        + " ".repeat(nameW)
+                        + Theme.render(frameStyle, "│")
+                        + " ".repeat(parentW)
+                        + Theme.render(frameStyle, "│")
+                        + " ".repeat(statW)
+                        + Theme.render(frameStyle, "│"));
+            }
+        }
+
+        // Bottom table divider
+        String botTableDiv = Theme.render(frameStyle, "├" + "─".repeat(idW) + "┴" + "─".repeat(nameW) + "┴" + "─".repeat(parentW) + "┴" + "─".repeat(statW) + "┤");
+        lines.add(botTableDiv);
+
+        // Summary & Pagination row
+        int startNum = totalAll == 0 ? 0 : pageStart + 1;
+        int endNum = pageEnd;
+        String summaryLeft = "  Showing " + startNum + "-" + endNum + " of " + totalAll;
+        String summaryRight = "[←/→] Page " + (userPage + 1) + " of " + totalPages + "   ";
+        int sGap = Math.max(1, inner - Theme.width(summaryLeft) - Theme.width(summaryRight));
+        String summaryRow = Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminDim(), summaryLeft)
+                + " ".repeat(sGap)
+                + Theme.render(Theme.adminDim(), summaryRight)
+                + Theme.render(frameStyle, "│");
+        lines.add(summaryRow);
+
+        // 5. Footer divider
+        lines.add(adminDivider(inner, frameStyle));
+
+        // 6. Action hints inside card
+        String gap = "    ";
+        String footerLine = "  "
+                + Theme.render(Theme.adminBadgeKey(), "↑↓") + Theme.render(Theme.adminText(), " Select" + gap)
+                + Theme.render(Theme.adminBadgeKey(), "Enter") + Theme.render(Theme.adminText(), " Edit" + gap)
+                + Theme.render(Theme.adminBadgeGreen(), "N") + Theme.render(Theme.adminText(), " New" + gap)
+                + Theme.render(Theme.adminBadgeYellow(), "T") + Theme.render(Theme.adminText(), " Toggle" + gap)
+                + Theme.render(Theme.adminBadgeRed(), "D") + Theme.render(Theme.adminText(), " Delete" + gap)
+                + Theme.render(Theme.adminBadgePurple(), "B") + Theme.render(Theme.adminText(), " Back" + gap)
+                + Theme.render(Theme.adminBadgeRed(), "Q") + Theme.render(Theme.adminText(), " Quit");
+        lines.add(adminRow(footerLine, inner, frameStyle));
+
+        // 7. Status line (if any)
+        if (status != null && !status.isEmpty()) {
+            Style st = statusErr ? Theme.err() : Theme.ok();
+            String prefix = statusErr ? " ERROR: " : " OK: ";
+            lines.add(adminRow("  " + Theme.render(st, prefix + status), inner, frameStyle));
+        }
+
+        // 8. Bottom card border
+        lines.add(Theme.render(frameStyle, "└" + "─".repeat(inner) + "┘"));
+
+        return String.join("\n", lines);
+    }
+
+    private String renderMiniBar(double percentage, int barWidth) {
+        int filled = (int) Math.round((percentage / 100.0) * barWidth);
+        filled = Math.max(0, Math.min(barWidth, filled));
+        return "[" + "■".repeat(filled) + "□".repeat(barWidth - filled) + "]";
+    }
+
+    private String formatMiniBar(double percentage, int barWidth) {
+        int filled = (int) Math.round((percentage / 100.0) * barWidth);
+        filled = Math.max(0, Math.min(barWidth, filled));
+        return Theme.render(Theme.adminDim(), "[")
+                + Theme.render(Theme.adminBadgeGreen(), "■".repeat(filled))
+                + Theme.render(Theme.adminDim(), "□".repeat(barWidth - filled) + "]");
+    }
+
+    String renderAdminAnalyticsPage(int fw) {
+        int inner = fw - 2;
+        List<String> lines = new ArrayList<>();
+        Style frameStyle = Theme.adminBorder();
+        Style tableBorder = Theme.adminBorder();
+
+        if (analytics == null) {
+            refreshAnalytics();
+        }
+
+        // 1. Top outer border
+        String titleRaw = "┌─ 📊 LIFEForge / PLATFORM ANALYTICS ";
+        int usedW = Theme.width(titleRaw);
+        int dashCount = Math.max(0, (inner + 2) - usedW - 1);
+        String topBorder = Theme.render(frameStyle, "┌─ ")
+                + "📊 "
+                + Theme.render(Theme.adminHeader(), "LIFEForge")
+                + Theme.render(Theme.dim(), " / ")
+                + Theme.render(Theme.adminHeaderSub(), "PLATFORM ANALYTICS")
+                + Theme.render(frameStyle, " " + "─".repeat(dashCount) + "┐");
+        lines.add(topBorder);
+
+        // 2. Subtitle
+        lines.add(padLine(Theme.render(Theme.dim(), "Platform health, engagement, and goal distribution"), fw, frameStyle));
+
+        // 3. Section divider
+        lines.add(adminDivider(inner, frameStyle));
+
+        // 4. Component A: [ PLATFORM KPI SNAPSHOT ]
+        lines.add(padLine(Theme.render(Theme.headingCyan(), "[ PLATFORM KPI SNAPSHOT ]"), fw, frameStyle));
+
+        String kpiTop = Theme.render(tableBorder, "┌" + "─".repeat(18) + "┬" + "─".repeat(18) + "┬" + "─".repeat(26) + "┐");
+        lines.add(padLine(kpiTop, fw, frameStyle));
+
+        long tUsers = analytics == null ? 0 : analytics.totalUsers;
+        long aUsers = analytics == null ? 0 : analytics.activeUsers;
+        int aPct = (int) Math.round(tUsers == 0 ? 0 : (aUsers * 100.0 / tUsers));
+        long tRecs = analytics == null ? 0 : analytics.totalRecommendations;
+        long sRecs = analytics == null ? 0 : analytics.totalSavedRecommendations;
+
+        String kpi1 = Theme.render(Theme.adminBadgePurple(), " USERS: ") + Theme.render(Theme.adminText(), Theme.padRight(tUsers + " Total", 10));
+        String kpi2 = Theme.render(Theme.adminBadgeGreen(), " ACTIVE: ") + Theme.render(Theme.adminText(), Theme.padRight(aUsers + " (" + aPct + "%)", 9));
+        String kpi3 = Theme.render(Theme.adminBadgeYellow(), " RECS: ") + Theme.render(Theme.adminText(), Theme.padRight(tRecs + " Live / " + sRecs + " Saved", 19));
+        String kpiRow = Theme.render(tableBorder, "│") + kpi1 + Theme.render(tableBorder, "│") + kpi2 + Theme.render(tableBorder, "│") + kpi3 + Theme.render(tableBorder, "│");
+        lines.add(padLine(kpiRow, fw, frameStyle));
+
+        String kpiBot = Theme.render(tableBorder, "└" + "─".repeat(18) + "┴" + "─".repeat(18) + "┴" + "─".repeat(26) + "┘");
+        lines.add(padLine(kpiBot, fw, frameStyle));
+
+        // 5. Blank spacer
+        lines.add(padLine("", fw, frameStyle));
+
+        // 6. Component B: [ GOAL DISTRIBUTION ]
+        List<AnalyticsService.GoalDistributionEntry> gd = safe(analytics == null ? null : analytics.goalDistribution);
+        long totalGoalUsers = 0;
+        for (AnalyticsService.GoalDistributionEntry e : gd) {
+            totalGoalUsers += e.userCount;
+        }
+        String gdTitle = "[ GOAL DISTRIBUTION ]";
+        String gdCounter = "Total Goals: " + gd.size();
+        int gdGap = Math.max(1, 66 - Theme.width(gdTitle) - Theme.width(gdCounter));
+        String gdHeaderLine = Theme.render(Theme.headingCyan(), gdTitle)
+                + " ".repeat(gdGap)
+                + Theme.render(Theme.dim(), gdCounter);
+        lines.add(padLine(gdHeaderLine, fw, frameStyle));
+
+        String gdTop = Theme.render(tableBorder, "┌" + "─".repeat(23) + "┬" + "─".repeat(8) + "┬" + "─".repeat(10) + "┬" + "─".repeat(20) + "┐");
+        lines.add(padLine(gdTop, fw, frameStyle));
+
+        String gdCols = Theme.render(tableBorder, "│")
+                + Theme.render(Theme.adminHeader(), Theme.padRight(" GOAL", 23))
+                + Theme.render(tableBorder, "│")
+                + Theme.render(Theme.adminHeader(), Theme.padRight(" USERS", 8))
+                + Theme.render(tableBorder, "│")
+                + Theme.render(Theme.adminHeader(), Theme.padRight(" SHARE", 10))
+                + Theme.render(tableBorder, "│")
+                + Theme.render(Theme.adminHeader(), Theme.padRight(" DISTRIBUTION", 20))
+                + Theme.render(tableBorder, "│");
+        lines.add(padLine(gdCols, fw, frameStyle));
+
+        String gdMid = Theme.render(tableBorder, "├" + "─".repeat(23) + "┼" + "─".repeat(8) + "┼" + "─".repeat(10) + "┼" + "─".repeat(20) + "┤");
+        lines.add(padLine(gdMid, fw, frameStyle));
+
+        if (gd.isEmpty()) {
+            String emptyRow = Theme.render(tableBorder, "│") + Theme.render(Theme.dim(), Theme.padRight(" No goal selections yet.", 65)) + Theme.render(tableBorder, "│");
+            lines.add(padLine(emptyRow, fw, frameStyle));
+        } else {
+            for (AnalyticsService.GoalDistributionEntry e : gd) {
+                double pct = totalGoalUsers == 0 ? 0 : (e.userCount * 100.0 / totalGoalUsers);
+                String gName = Theme.truncate(" " + (e.goalName == null ? "Unknown Goal" : e.goalName), 23);
+                String gCol1 = Theme.padRight(gName, 23);
+                String gCol2 = Theme.padCenter(String.valueOf(e.userCount), 8);
+                String gCol3 = Theme.padCenter(String.format(Locale.ROOT, "%.1f%%", pct), 10);
+                String gCol4 = " " + formatMiniBar(pct, 16) + " ";
+                String row = Theme.render(tableBorder, "│")
+                        + Theme.render(Theme.adminText(), gCol1)
+                        + Theme.render(tableBorder, "│")
+                        + Theme.render(Theme.adminBadgePurple(), gCol2)
+                        + Theme.render(tableBorder, "│")
+                        + Theme.render(Theme.adminDim(), gCol3)
+                        + Theme.render(tableBorder, "│")
+                        + gCol4
+                        + Theme.render(tableBorder, "│");
+                lines.add(padLine(row, fw, frameStyle));
+            }
+        }
+
+        String gdBot = Theme.render(tableBorder, "└" + "─".repeat(23) + "┴" + "─".repeat(8) + "┴" + "─".repeat(10) + "┴" + "─".repeat(20) + "┘");
+        lines.add(padLine(gdBot, fw, frameStyle));
+
+        // 7. Blank spacer
+        lines.add(padLine("", fw, frameStyle));
+
+        // 8. Component C: [ POPULAR CATEGORIES ]
+        List<AnalyticsService.CategoryPopularityEntry> pc = safe(analytics == null ? null : analytics.popularCategories);
+        long totalSaves = 0;
+        for (AnalyticsService.CategoryPopularityEntry e : pc) {
+            totalSaves += e.saveCount;
+        }
+        String pcTitle = "[ POPULAR CATEGORIES ]";
+        String pcCounter = "Total Saves: " + totalSaves;
+        int pcGap = Math.max(1, 66 - Theme.width(pcTitle) - Theme.width(pcCounter));
+        String pcHeaderLine = Theme.render(Theme.headingCyan(), pcTitle)
+                + " ".repeat(pcGap)
+                + Theme.render(Theme.dim(), pcCounter);
+        lines.add(padLine(pcHeaderLine, fw, frameStyle));
+
+        String pcTop = Theme.render(tableBorder, "┌" + "─".repeat(23) + "┬" + "─".repeat(8) + "┬" + "─".repeat(10) + "┬" + "─".repeat(20) + "┐");
+        lines.add(padLine(pcTop, fw, frameStyle));
+
+        String pcCols = Theme.render(tableBorder, "│")
+                + Theme.render(Theme.adminHeader(), Theme.padRight(" CATEGORY", 23))
+                + Theme.render(tableBorder, "│")
+                + Theme.render(Theme.adminHeader(), Theme.padRight(" SAVES", 8))
+                + Theme.render(tableBorder, "│")
+                + Theme.render(Theme.adminHeader(), Theme.padRight(" SHARE", 10))
+                + Theme.render(tableBorder, "│")
+                + Theme.render(Theme.adminHeader(), Theme.padRight(" POPULARITY", 20))
+                + Theme.render(tableBorder, "│");
+        lines.add(padLine(pcCols, fw, frameStyle));
+
+        String pcMid = Theme.render(tableBorder, "├" + "─".repeat(23) + "┼" + "─".repeat(8) + "┼" + "─".repeat(10) + "┼" + "─".repeat(20) + "┤");
+        lines.add(padLine(pcMid, fw, frameStyle));
+
+        if (pc.isEmpty()) {
+            String emptyRow = Theme.render(tableBorder, "│") + Theme.render(Theme.dim(), Theme.padRight(" Nothing saved yet.", 65)) + Theme.render(tableBorder, "│");
+            lines.add(padLine(emptyRow, fw, frameStyle));
+        } else {
+            for (AnalyticsService.CategoryPopularityEntry e : pc) {
+                double pct = totalSaves == 0 ? 0 : (e.saveCount * 100.0 / totalSaves);
+                String cName = Theme.truncate(" " + (e.categoryName == null ? "Unknown Category" : e.categoryName), 23);
+                String cCol1 = Theme.padRight(cName, 23);
+                String cCol2 = Theme.padCenter(String.valueOf(e.saveCount), 8);
+                String cCol3 = Theme.padCenter(String.format(Locale.ROOT, "%.1f%%", pct), 10);
+                String cCol4 = " " + formatMiniBar(pct, 16) + " ";
+                String row = Theme.render(tableBorder, "│")
+                        + Theme.render(Theme.adminText(), cCol1)
+                        + Theme.render(tableBorder, "│")
+                        + Theme.render(Theme.adminBadgePurple(), cCol2)
+                        + Theme.render(tableBorder, "│")
+                        + Theme.render(Theme.adminDim(), cCol3)
+                        + Theme.render(tableBorder, "│")
+                        + cCol4
+                        + Theme.render(tableBorder, "│");
+                lines.add(padLine(row, fw, frameStyle));
+            }
+        }
+
+        String pcBot = Theme.render(tableBorder, "└" + "─".repeat(23) + "┴" + "─".repeat(8) + "┴" + "─".repeat(10) + "┴" + "─".repeat(20) + "┘");
+        lines.add(padLine(pcBot, fw, frameStyle));
+
+        // 9. Bottom card border
+        lines.add(Theme.render(frameStyle, "└" + "─".repeat(inner) + "┘"));
+
+        // 10. Blank line and single-line command footer
+        lines.add("");
+        String footer = " "
+                + Theme.render(Theme.adminBadgeGreen(), "[R]") + " " + Theme.render(Theme.adminText(), "Refresh Stats") + "    "
+                + Theme.render(Theme.adminBadgePurple(), "[H]") + " " + Theme.render(Theme.adminText(), "Home") + "    "
+                + Theme.render(Theme.adminBadgeYellow(), "[B]") + " " + Theme.render(Theme.adminText(), "Back") + "    "
+                + Theme.render(Theme.adminBadgeRed(), "[Q]") + " " + Theme.render(Theme.adminText(), "Quit");
+        lines.add(footer);
+
+        return String.join("\n", lines);
+    }
+
+    String renderAdminAuditPage(int fw) {
+        int inner = fw - 2;
+        List<String> lines = new ArrayList<>();
+        Style frameStyle = Theme.adminBorder();
+
+        if (logs == null) {
+            refreshLogs();
+        }
+
+        List<AuditLog> view = safe(logs);
+        int totalAll = view.size();
+        int pageSize = auditPageSize;
+        int totalPages = Math.max(1, (int) Math.ceil((double) totalAll / pageSize));
+        if (auditPage < 0) auditPage = 0;
+        if (auditPage >= totalPages) auditPage = totalPages - 1;
+
+        int pageStart = auditPage * pageSize;
+        int pageEnd = Math.min(pageStart + pageSize, totalAll);
+        int pageRows = pageEnd - pageStart;
+        if (sel >= pageRows && pageRows > 0) {
+            sel = pageRows - 1;
+        }
+
+        // 1. Top outer border
+        String titleRaw = "┌─ 📋 LIFEForge / AUDIT LOGS (Admin) ";
+        int usedW = Theme.width(titleRaw);
+        int dashCount = Math.max(0, (inner + 2) - usedW - 1);
+        String topBorder = Theme.render(frameStyle, "┌─ ")
+                + "📋 "
+                + Theme.render(Theme.adminHeader(), "LIFEForge")
+                + Theme.render(Theme.dim(), " / ")
+                + Theme.render(Theme.adminHeaderSub(), "AUDIT LOGS (Admin)")
+                + Theme.render(frameStyle, " " + "─".repeat(dashCount) + "┐");
+        lines.add(topBorder);
+
+        // Sub-header filter line if active search query exists
+        if (auditSearchQuery != null && !auditSearchQuery.trim().isEmpty()) {
+            String filterText = "  " + Theme.render(Theme.adminHeader(), "Filter: ")
+                    + Theme.render(Theme.adminBadgeYellow(), "\"" + auditSearchQuery.trim() + "\"")
+                    + Theme.render(Theme.adminDim(), " (Showing " + totalAll + " events)");
+            lines.add(adminRow(filterText, inner, frameStyle));
+        }
+
+        // 2. Table Column Widths (80 Total Columns)
+        // Outer frame = 80 chars, inner = 78 chars.
+        // Columns: TIMESTAMP (14), ACTOR (10), ACTION (14), TARGET (10), DETAILS (26)
+        // 14 + 1 + 10 + 1 + 14 + 1 + 10 + 1 + 26 = 78 inner
+        // + 2 outer borders = 80 total.
+        int timeW = 14;
+        int actorW = 10;
+        int actionW = 14;
+        int targetW = 10;
+        int flex = inner - (timeW + 1 + actorW + 1 + actionW + 1 + targetW + 1);
+        int detailsW = Math.max(18, flex);
+
+        // Top table divider
+        String topTableDiv = Theme.render(frameStyle, "├"
+                + "─".repeat(timeW) + "┬"
+                + "─".repeat(actorW) + "┬"
+                + "─".repeat(actionW) + "┬"
+                + "─".repeat(targetW) + "┬"
+                + "─".repeat(detailsW) + "┤");
+        lines.add(topTableDiv);
+
+        // Header row
+        String hTime = Theme.padRight(" TIMESTAMP", timeW);
+        String hActor = Theme.padRight(" ACTOR", actorW);
+        String hAction = Theme.padRight(" ACTION", actionW);
+        String hTarget = Theme.padRight(" TARGET", targetW);
+        String hDetails = Theme.padRight(" DETAILS", detailsW);
+        String headerRow = Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hTime)
+                + Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hActor)
+                + Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hAction)
+                + Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hTarget)
+                + Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminHeader(), hDetails)
+                + Theme.render(frameStyle, "│");
+        lines.add(headerRow);
+
+        // Mid table divider
+        String midTableDiv = Theme.render(frameStyle, "├"
+                + "─".repeat(timeW) + "┼"
+                + "─".repeat(actorW) + "┼"
+                + "─".repeat(actionW) + "┼"
+                + "─".repeat(targetW) + "┼"
+                + "─".repeat(detailsW) + "┤");
+        lines.add(midTableDiv);
+
+        // Data rows (pageSize = 8)
+        for (int i = 0; i < pageSize; i++) {
+            int globalIdx = pageStart + i;
+            if (globalIdx < pageEnd) {
+                AuditLog l = view.get(globalIdx);
+                boolean isSel = (i == sel);
+
+                String timeStr = l.getCreatedAt() == null ? "-" : l.getCreatedAt().format(AUDIT_TIME_FMT);
+                String timeRaw = (isSel ? "> " : "  ") + timeStr;
+                String timeText = Theme.padRight(timeRaw, timeW);
+
+                String actorRaw = " " + formatAuditActor(l);
+                String actorText = Theme.padRight(Theme.truncate(actorRaw, actorW), actorW);
+
+                Object[] labeled = auditActionLabel(l.getAction());
+                String actionTag = (String) labeled[0];
+                Style actionSt = (Style) labeled[1];
+                String actionRaw = " " + actionTag;
+                String actionText = Theme.padRight(Theme.truncate(actionRaw, actionW), actionW);
+
+                String targetRaw = " " + formatAuditTarget(l);
+                String targetText = Theme.padRight(Theme.truncate(targetRaw, targetW), targetW);
+
+                String detailsRaw = " " + formatAuditDetails(l);
+                String detailsText = Theme.padRight(Theme.truncate(detailsRaw, detailsW), detailsW);
+
+                if (isSel) {
+                    Style bg = Theme.rowSelected();
+                    Style actionSelSt = actionSt.background(Theme.ADMIN_SELECT_BG);
+                    String rowStr = Theme.render(frameStyle, "│")
+                            + Theme.render(Theme.rowSelectedId(), timeText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(bg, actorText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(actionSelSt, actionText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(Theme.rowSelectedBadgePurple(), targetText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(bg, detailsText)
+                            + Theme.render(frameStyle, "│");
+                    lines.add(rowStr);
+                } else {
+                    String rowStr = Theme.render(frameStyle, "│")
+                            + Theme.render(Theme.adminDim(), timeText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(Theme.adminText(), actorText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(actionSt, actionText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(Theme.adminBadgePurple(), targetText)
+                            + Theme.render(frameStyle, "│")
+                            + Theme.render(Theme.adminText(), detailsText)
+                            + Theme.render(frameStyle, "│");
+                    lines.add(rowStr);
+                }
+            } else {
+                lines.add(Theme.render(frameStyle, "│")
+                        + " ".repeat(timeW)
+                        + Theme.render(frameStyle, "│")
+                        + " ".repeat(actorW)
+                        + Theme.render(frameStyle, "│")
+                        + " ".repeat(actionW)
+                        + Theme.render(frameStyle, "│")
+                        + " ".repeat(targetW)
+                        + Theme.render(frameStyle, "│")
+                        + " ".repeat(detailsW)
+                        + Theme.render(frameStyle, "│"));
+            }
+        }
+
+        // Bottom table divider
+        String botTableDiv = Theme.render(frameStyle, "├"
+                + "─".repeat(timeW) + "┴"
+                + "─".repeat(actorW) + "┴"
+                + "─".repeat(actionW) + "┴"
+                + "─".repeat(targetW) + "┴"
+                + "─".repeat(detailsW) + "┤");
+        lines.add(botTableDiv);
+
+        // Summary & Pagination row inside bottom card
+        int startNum = totalAll == 0 ? 0 : pageStart + 1;
+        int endNum = pageEnd;
+        String summaryLeft = "  Showing " + startNum + "-" + endNum + " of " + totalAll;
+        String summaryRight = "[←/→] Page " + (auditPage + 1) + " of " + totalPages + "   ";
+        int sGap = Math.max(1, inner - Theme.width(summaryLeft) - Theme.width(summaryRight));
+        String summaryRow = Theme.render(frameStyle, "│")
+                + Theme.render(Theme.adminDim(), summaryLeft)
+                + " ".repeat(sGap)
+                + Theme.render(Theme.adminDim(), summaryRight)
+                + Theme.render(frameStyle, "│");
+        lines.add(summaryRow);
+
+        // Optional status row inside card if status message is present
+        if (status != null && !status.isEmpty()) {
+            lines.add(adminDivider(inner, frameStyle));
+            Style st = statusErr ? Theme.err() : Theme.ok();
+            String prefix = statusErr ? " ERROR: " : " OK: ";
+            lines.add(adminRow("  " + Theme.render(st, prefix + status), inner, frameStyle));
+        }
+
+        // Bottom card border
+        lines.add(Theme.render(frameStyle, "└" + "─".repeat(inner) + "┘"));
+
+        // Blank line & compact single-line command footer
+        lines.add("");
+        String gap = "   ";
+        StringBuilder footer = new StringBuilder(" ");
+        footer.append(Theme.render(Theme.adminBadgeKey(), "[↑/↓]")).append(" ").append(Theme.render(Theme.adminText(), "Row")).append(gap);
+        footer.append(Theme.render(Theme.adminBadgeKey(), "[Enter]")).append(" ").append(Theme.render(Theme.adminText(), "View Details")).append(gap);
+        footer.append(Theme.render(Theme.adminBadgeKey(), "[S]")).append(" ").append(Theme.render(Theme.adminText(), "Search")).append(gap);
+        if (auditSearchQuery != null && !auditSearchQuery.trim().isEmpty()) {
+            footer.append(Theme.render(Theme.adminBadgeYellow(), "[C]")).append(" ").append(Theme.render(Theme.adminText(), "Clear Search")).append(gap);
+        }
+        footer.append(Theme.render(Theme.adminBadgeGreen(), "[R]")).append(" ").append(Theme.render(Theme.adminText(), "Refresh")).append(gap);
+        footer.append(Theme.render(Theme.adminBadgePurple(), "[B]")).append(" ").append(Theme.render(Theme.adminText(), "Back"));
+        lines.add(footer.toString());
+
+        return String.join("\n", lines);
+    }
+
+    public List<AuditLog> getLogs() {
+        return logs;
+    }
+
+    public void setLogs(List<AuditLog> logs) {
+        this.logs = logs;
+    }
+
+    public int getAuditPage() {
+        return auditPage;
+    }
+
+    public void setAuditPage(int auditPage) {
+        this.auditPage = auditPage;
+    }
+
+    public String getAuditSearchQuery() {
+        return auditSearchQuery;
+    }
+
+    public void setAuditSearchQuery(String auditSearchQuery) {
+        this.auditSearchQuery = (auditSearchQuery == null) ? "" : auditSearchQuery;
+    }
+
+    public AuditLog getSelAudit() {
+        return selAudit;
+    }
+
+    public void setSelAudit(AuditLog selAudit) {
+        this.selAudit = selAudit;
     }
 
     private String viewAdminGoals(List<Line> body) {
@@ -4880,21 +7474,17 @@ public final class LifeForge implements Model {
             return "0 goal(s)";
         }
 
-        body.add(Line.of(Theme.dim(),
-                "  Enter = edit   N = new   D = delete   \u2191/\u2193 = move   \u2190/\u2192 = page"));
-        body.add(Line.blank());
-
         int pageStart = userPage * userPageSize;
         int pageEnd = Math.min(pageStart + userPageSize, totalAll);
 
-        String[] headers = { "ID", "CODE", "GOAL NAME", "STATUS" };
+        String[] headers = { "ID", "GOAL NAME", "SYSTEM KEY", "STATUS" };
         String[][] rows = new String[pageEnd - pageStart][4];
         for (int i = pageStart; i < pageEnd; i++) {
             Goal g = goals.get(i);
             rows[i - pageStart] = new String[] {
                     "#" + g.getId(),
-                    g.getCode(),
                     g.getName(),
+                    g.getCode(),
                     g.isActive() ? "\u25CF Active" : "\u25CB Inactive"
             };
         }
@@ -4913,20 +7503,19 @@ public final class LifeForge implements Model {
     }
 
     private String viewAdminCats(List<Line> body) {
+        if (catList != null) {
+            catList.sort(Comparator.comparing(RecommendationCategory::getId, Comparator.nullsLast(Long::compareTo)));
+        }
         int totalAll = catList == null ? 0 : catList.size();
         if (totalAll == 0) {
             body.add(Line.of(Theme.warn(), "  No categories yet. Press N to create one."));
             return "0 category(ies)";
         }
 
-        body.add(Line.of(Theme.dim(),
-                "  Enter = edit   N = new   D = delete   \u2191/\u2193 = move   \u2190/\u2192 = page"));
-        body.add(Line.blank());
-
         int pageStart = userPage * userPageSize;
         int pageEnd = Math.min(pageStart + userPageSize, totalAll);
 
-        String[] headers = { "ID", "CATEGORY", "PARENT", "STATUS" };
+        String[] headers = { "ID", "CATEGORY NAME", "PARENT GROUP", "STATUS" };
         String[][] rows = new String[pageEnd - pageStart][4];
         Map<Long, String> parentNames = new HashMap<>();
         for (RecommendationCategory c : catList) {
@@ -4935,12 +7524,13 @@ public final class LifeForge implements Model {
         for (int i = pageStart; i < pageEnd; i++) {
             RecommendationCategory c = catList.get(i);
             String parent = c.getParentCategoryId() == null
-                    ? "-" : parentNames.getOrDefault(c.getParentCategoryId(), "#" + c.getParentCategoryId());
+                    ? "Root (None)" : parentNames.getOrDefault(c.getParentCategoryId(), "#" + c.getParentCategoryId());
+            boolean active = !inactiveCatIds.contains(c.getId());
             rows[i - pageStart] = new String[] {
                     "#" + c.getId(),
                     c.getName(),
                     parent,
-                    "\u25CF Active"
+                    active ? "\u25CF Active" : "\u25CB Inactive"
             };
         }
         body.addAll(flatTable(headers, rows, Math.max(0, sel), width - 4));
@@ -5143,140 +7733,332 @@ public final class LifeForge implements Model {
         return "Enter to filter the audit log list";
     }
 
-    private String viewAdminResetRequests(List<Line> body) {
-        int totalAll = resetList == null ? 0 : resetList.size();
-        body.add(Line.of(Theme.dim(),
-                "  Review and approve password reset requests."));
-        body.add(Line.of(Theme.dim(),
-                "  \u2191/\u2193 select   Enter details   A approve   R reject   F refresh"));
-        body.add(Line.of(Theme.dim(),
-                "  Only pending requests can be approved or rejected."));
-        body.add(Line.blank());
+    String renderForgotPasswordPage(int fw) {
+        int inner = fw - 2;
+        List<String> lines = new ArrayList<>();
+        Style frameStyle = Theme.bar();
 
-        if (totalAll == 0) {
-            body.add(Line.of(Theme.warn(), "  No password reset requests recorded yet."));
-            return "0 request(s)";
+        // 1. Top outer border
+        String titleRaw = "┌─ 🔑 LIFEForge / FORGOT PASSWORD ";
+        int usedW = Theme.width(titleRaw);
+        int dashCount = Math.max(0, (inner + 2) - usedW - 1);
+        String topBorder = Theme.render(frameStyle, "┌─ ")
+                + "🔑 "
+                + Theme.render(Theme.headingCyan(), "LIFEForge")
+                + Theme.render(Theme.dim(), " / ")
+                + Theme.render(Theme.headingCyan(), "FORGOT PASSWORD")
+                + Theme.render(frameStyle, " " + "─".repeat(dashCount) + "┐");
+        lines.add(topBorder);
+
+        // 2. Breathing room + Subtitle
+        lines.add(padLine("", fw, frameStyle));
+        lines.add(padLine(Theme.render(Theme.dim(), "Enter your registered email address or username to receive a 6-digit code."), fw, frameStyle));
+        lines.add(padLine("", fw, frameStyle));
+
+        // 3. Section divider
+        lines.add(adminDivider(inner, frameStyle));
+
+        // 4. Section header
+        lines.add(padLine("", fw, frameStyle));
+        lines.add(padLine(Theme.render(Theme.headingCyan(), "[ ACCOUNT VERIFICATION ]"), fw, frameStyle));
+        lines.add(padLine("", fw, frameStyle));
+
+        // 5. Form Input: Username or Email
+        String label = "Username or Email   : ";
+        String val = (fValues != null && fValues.length > 0 && fValues[0] != null) ? fValues[0] : "";
+        int boxInnerW = 42;
+        String display = val;
+        if (fFocus == 0) {
+            display = display + "|";
+        }
+        if (Theme.width(display) > boxInnerW) {
+            display = Theme.truncate(display, boxInnerW);
+        }
+        int pad = Math.max(0, boxInnerW - Theme.width(display));
+        String boxContent = " " + display + " ".repeat(pad) + " ";
+        Style lblStyle = (fFocus == 0) ? Theme.headingCyan() : Theme.dim();
+        Style boxBorderStyle = (fFocus == 0) ? Theme.accentOn() : Theme.dim();
+        Style txtStyle = (fFocus == 0) ? Theme.text() : Theme.dim();
+
+        String inputRow = Theme.render(lblStyle, label)
+                + Theme.render(boxBorderStyle, "[")
+                + Theme.render(txtStyle, boxContent)
+                + Theme.render(boxBorderStyle, "]");
+        lines.add(padLine(inputRow, fw, frameStyle));
+
+        lines.add(padLine("", fw, frameStyle));
+
+        // 6. Status message line (if any)
+        if (status != null && !status.isEmpty()) {
+            Style st = statusErr ? Theme.err() : Theme.ok();
+            String prefix = statusErr ? "⚠ " : "✓ ";
+            lines.add(padLine(Theme.render(st, prefix + status), fw, frameStyle));
+        } else {
+            lines.add(padLine("", fw, frameStyle));
         }
 
-        int pageStart = resetPage * resetPageSize;
-        int pageEnd = Math.min(pageStart + resetPageSize, totalAll);
+        // 7. Divider before footer
+        lines.add(adminDivider(inner, frameStyle));
 
-        String[] headers = { "ID", "USER", "EMAIL", "REQUESTED", "STATUS" };
-        String[][] rows = new String[pageEnd - pageStart][5];
-        for (int i = pageStart; i < pageEnd; i++) {
-            com.lifeforge.model.PasswordReset r = resetList.get(i);
-            String[] labels = resetUserLabels.getOrDefault(r.getUserId(),
-                    new String[] { "#" + r.getUserId(), "-" });
-            String requested = r.getCreatedAt() == null
-                    ? "-" : r.getCreatedAt().format(AUDIT_TIME_FMT);
-            rows[i - pageStart] = new String[] {
-                    "#" + r.getId(),
-                    labels[0],
-                    labels[1],
-                    requested,
-                    resetStatusBadge(r)
-            };
-        }
-        body.addAll(ScreenKit.proTable(headers, rows, Math.max(0, sel), width - 4));
-        body.add(Line.of(Theme.dim(), String.format("  Page %d/%d   \u2014   %d request(s)",
-                resetPage + 1, Math.max(1, (int) Math.ceil((double) totalAll / resetPageSize)),
-                totalAll)));
-        return totalAll + " request(s)";
+        // 8. Single-line footer inside frame
+        String footerContent = Theme.render(Theme.adminBadgeGreen(), "[Enter]") + " " + Theme.render(Theme.text(), "Send Code")
+                + "         "
+                + Theme.render(Theme.adminBadgePurple(), "[ESC/B]") + " " + Theme.render(Theme.text(), "Back to Login");
+        lines.add(padLine(footerContent, fw, frameStyle));
+
+        // 9. Bottom card border
+        lines.add(Theme.render(frameStyle, "└" + "─".repeat(inner) + "┘"));
+
+        return String.join("\n", lines);
     }
 
-    private String resetStatusBadge(com.lifeforge.model.PasswordReset r) {
-        String st = r.getStatus();
-        if (st == null) {
-            st = r.isUsed()
-                    ? com.lifeforge.service.PasswordResetService.STATUS_COMPLETED
-                    : com.lifeforge.service.PasswordResetService.STATUS_PENDING;
+    String renderVerifyResetPage(int fw) {
+        int inner = fw - 2;
+        List<String> lines = new ArrayList<>();
+        Style frameStyle = Theme.bar();
+
+        // 1. Top outer border
+        String titleRaw = "┌─ 🔑 LIFEForge / RESET PASSWORD ";
+        int usedW = Theme.width(titleRaw);
+        int dashCount = Math.max(0, (inner + 2) - usedW - 1);
+        String topBorder = Theme.render(frameStyle, "┌─ ")
+                + "🔑 "
+                + Theme.render(Theme.headingCyan(), "LIFEForge")
+                + Theme.render(Theme.dim(), " / ")
+                + Theme.render(Theme.headingCyan(), "RESET PASSWORD")
+                + Theme.render(frameStyle, " " + "─".repeat(dashCount) + "┐");
+        lines.add(topBorder);
+
+        // 2. Subtitle (fixed text without truncation)
+        lines.add(adminRow("  " + Theme.render(Theme.dim(), "Enter the 6-digit verification code along with your new password."), inner, frameStyle));
+
+        // 3. Section divider
+        lines.add(adminDivider(inner, frameStyle));
+
+        // 4. Section header
+        lines.add(adminRow("  " + Theme.render(Theme.headingCyan(), "[ VERIFY & RESET CREDENTIALS ]"), inner, frameStyle));
+        lines.add(adminRow("", inner, frameStyle));
+
+        // 5. Demo Code line (Simulation / Console)
+        String demoCode = (resetUserId != null) ? ctx.passwordResetController.getActiveCode(resetUserId) : null;
+        if (demoCode == null && resetUserId != null) {
+            demoCode = ctx.passwordResetController.devLastCode(resetUserId);
         }
-        switch (st) {
-            case "APPROVED":
-                return "\u2713 Approved";
-            case "REJECTED":
-                return "\u2715 Rejected";
-            case "COMPLETED":
-                return "\u2713 Completed";
-            case "PENDING":
-            default:
-                return "\u231B Pending";
+        String codeDisplay = (demoCode != null) ? demoCode : "849201";
+        String demoLine = "  " + Theme.render(Theme.dim(), "Demo Code Sent      : ")
+                + Theme.render(Theme.adminBadgeYellow(), codeDisplay)
+                + "  " + Theme.render(Theme.adminDim(), "(Simulation / Console)");
+        lines.add(adminRow(demoLine, inner, frameStyle));
+        lines.add(adminRow("", inner, frameStyle));
+
+        // 6. Form inputs (3 fields)
+        String[] labels = {
+            "Verification Code   : ",
+            "New Password        : ",
+            "Confirm Password    : "
+        };
+        int boxInnerW = 42;
+
+        for (int i = 0; i < 3; i++) {
+            boolean foc = (fFocus == i);
+            String val = (fValues != null && fValues.length > i && fValues[i] != null) ? fValues[i] : "";
+            String display = (i > 0) ? "*".repeat(val.length()) : val;
+            if (foc) {
+                display = display + "|";
+            }
+            if (Theme.width(display) > boxInnerW) {
+                display = Theme.truncate(display, boxInnerW);
+            }
+            int pad = Math.max(0, boxInnerW - Theme.width(display));
+            String boxContent = " " + display + " ".repeat(pad) + " ";
+            Style lblStyle = foc ? Theme.headingCyan() : Theme.dim();
+            Style boxBorderStyle = foc ? Theme.accentOn() : Theme.dim();
+            Style txtStyle = foc ? Theme.text() : Theme.dim();
+
+            String inputRow = "  " + Theme.render(lblStyle, labels[i])
+                    + Theme.render(boxBorderStyle, "[")
+                    + Theme.render(txtStyle, boxContent)
+                    + Theme.render(boxBorderStyle, "]");
+            lines.add(adminRow(inputRow, inner, frameStyle));
         }
+
+        lines.add(adminRow("", inner, frameStyle));
+
+        // 7. Status message line or Expiry hint
+        if (status != null && !status.isEmpty()) {
+            Style st = statusErr ? Theme.err() : Theme.ok();
+            String prefix = statusErr ? "⚠ " : "✓ ";
+            lines.add(adminRow("  " + Theme.render(st, prefix + status), inner, frameStyle));
+        } else {
+            lines.add(adminRow("  " + Theme.render(Theme.dim(), "Code expires in 5 minutes. Use [R] to request a new code."), inner, frameStyle));
+        }
+
+        // 8. Divider before footer
+        lines.add(adminDivider(inner, frameStyle));
+
+        // 9. Single-line footer inside frame
+        String footerContent = "  "
+                + Theme.render(Theme.adminBadgeGreen(), "[Enter]") + " " + Theme.render(Theme.text(), "Submit Reset")
+                + "    "
+                + Theme.render(Theme.adminBadgeYellow(), "[R]") + " " + Theme.render(Theme.text(), "Resend Code")
+                + "    "
+                + Theme.render(Theme.adminBadgePurple(), "[ESC/B]") + " " + Theme.render(Theme.text(), "Back to Login");
+        lines.add(adminRow(footerContent, inner, frameStyle));
+
+        // 10. Bottom card border
+        lines.add(Theme.render(frameStyle, "└" + "─".repeat(inner) + "┘"));
+
+        return String.join("\n", lines);
     }
 
-    private String resetStatusMessage(com.lifeforge.model.PasswordReset r) {
-        String st = r.getStatus();
-        if (st == null) {
-            st = r.isUsed()
-                    ? com.lifeforge.service.PasswordResetService.STATUS_COMPLETED
-                    : com.lifeforge.service.PasswordResetService.STATUS_PENDING;
-        }
-        switch (st) {
-            case "APPROVED":
-                return "This request has been approved. The user can now create a new password.";
-            case "REJECTED":
-                return "This request was rejected. The user cannot reset their password.";
-            case "COMPLETED":
-                return "This request has already been completed. It cannot be reused.";
-            case "PENDING":
-            default:
-                return "This request is waiting for administrator approval.";
-        }
-    }
+    String renderAdminSettingsPage(int fw) {
+        int inner = fw - 2;
+        List<String> lines = new ArrayList<>();
+        Style frameStyle = Theme.adminBorder();
+        Style cardBorder = Theme.adminCardBorder();
 
-    private String viewAdminResetDetail(List<Line> body) {
-        com.lifeforge.model.PasswordReset r = selReset;
-        if (r == null) {
-            body.add(Line.of(Theme.warn(), "  No reset request selected."));
-            return "";
-        }
-        body.add(Line.of(Theme.headingGreen(), "  [ RESET REQUEST #" + r.getId() + " ]"));
-        body.add(Line.blank());
-        String[] labels = resetUserLabels.getOrDefault(r.getUserId(),
-                new String[] { "#" + r.getUserId(), "-" });
-        body.add(ScreenKit.labelValueStyled("User", labels[0], Theme.pivot()));
-        body.add(ScreenKit.labelValueStyled("Email", labels[1], Theme.pivot()));
-        body.add(ScreenKit.labelValue("User ID", "#" + r.getUserId()));
-        body.add(ScreenKit.labelValue("Requested",
-                r.getCreatedAt() == null ? "-" : r.getCreatedAt().format(RESET_DETAIL_TIME_FMT)));
-        body.add(ScreenKit.labelValue("Expires",
-                r.getExpiresAt() == null ? "-" : r.getExpiresAt().format(RESET_DETAIL_TIME_FMT)));
-        body.add(ScreenKit.labelValue("Attempts", String.valueOf(r.getAttemptCount())));
-        body.add(ScreenKit.labelValue("Status", resetStatusBadge(r)));
-        body.add(Line.blank());
-        body.add(Line.of(Theme.dim(), "  " + resetStatusMessage(r)));
-        body.add(Line.blank());
-        body.add(Line.of(Theme.dim(), "  Menu:"));
-        body.addAll(menuLines());
-        return "Review password reset request";
-    }
+        lines.add("\u001B[H\u001B[2J");
 
-    private String viewAdminResetConfirm(List<Line> body) {
-        com.lifeforge.model.PasswordReset r = selReset;
-        if (r == null) {
-            body.add(Line.of(Theme.warn(), "  No reset request selected."));
-            body.addAll(menuLines());
-            return "";
+        // 1. Top outer border (80 columns total)
+        String titleRaw = "┌─ ⚙️  LIFEForge / SYSTEM SETTINGS ";
+        int usedW = Theme.width(titleRaw);
+        int dashCount = Math.max(0, (inner + 2) - usedW - 1);
+        String topBorder = Theme.render(frameStyle, "┌─ ")
+                + "⚙️  "
+                + Theme.render(Theme.adminHeader(), "LIFEForge")
+                + Theme.render(Theme.dim(), " / ")
+                + Theme.render(Theme.adminHeaderSub(), "SYSTEM SETTINGS")
+                + Theme.render(frameStyle, " " + "─".repeat(dashCount) + "┐");
+        lines.add(topBorder);
+
+        // Subtitle & Divider
+        lines.add(adminRow("  " + Theme.render(Theme.adminDim(), "Runtime environment, AI configuration, and platform constraints"), inner, frameStyle));
+        lines.add(adminDivider(inner, frameStyle));
+
+        // -------------------------------------------------------------
+        // Sub-Card 1: [ SYSTEM CORE ] (Total width: 74 chars)
+        // Col 1: 25, Col 2: 15, Col 3: 30 (25 + 1 + 15 + 1 + 30 = 72 inner)
+        // -------------------------------------------------------------
+        lines.add(adminRow("  " + Theme.render(Theme.headingCyan(), "[ SYSTEM CORE ]"), inner, frameStyle));
+
+        String sc1Top = Theme.render(cardBorder, "┌" + "─".repeat(25) + "┬" + "─".repeat(15) + "┬" + "─".repeat(30) + "┐");
+        lines.add(adminRow("  " + sc1Top + "  ", inner, frameStyle));
+
+        // Row 1
+        String sc1Col1 = Theme.render(Theme.adminDim(), " Name    : ") + Theme.render(Theme.adminText(), AppConfig.APP_NAME) + " ".repeat(Math.max(0, 25 - visibleWidth(" Name    : " + AppConfig.APP_NAME)));
+        String sc1Col2 = Theme.render(Theme.adminDim(), " Ver: ") + Theme.render(Theme.adminText(), AppConfig.APP_VERSION) + " ".repeat(Math.max(0, 15 - visibleWidth(" Ver: " + AppConfig.APP_VERSION)));
+        String dbBadge = dbOk ? Theme.render(Theme.adminBadgeGreen(), "● Connected") : Theme.render(Theme.adminBadgeRed(), "○ Disconnected");
+        String dbText = dbOk ? "● Connected" : "○ Disconnected";
+        String sc1Col3 = Theme.render(Theme.adminDim(), " DB Status: ") + dbBadge + " ".repeat(Math.max(0, 30 - visibleWidth(" DB Status: " + dbText)));
+        String sc1Row1 = Theme.render(cardBorder, "│") + sc1Col1 + Theme.render(cardBorder, "│") + sc1Col2 + Theme.render(cardBorder, "│") + sc1Col3 + Theme.render(cardBorder, "│");
+        lines.add(adminRow("  " + sc1Row1 + "  ", inner, frameStyle));
+
+        // Mid divider
+        String sc1Mid = Theme.render(cardBorder, "├" + "─".repeat(25) + "┴" + "─".repeat(15) + "┴" + "─".repeat(30) + "┤");
+        lines.add(adminRow("  " + sc1Mid + "  ", inner, frameStyle));
+
+        // Row 2: Tagline
+        String sc1Tagline = Theme.render(Theme.adminDim(), " Tagline : ") + Theme.render(Theme.adminText(), AppConfig.APP_TAGLINE) + " ".repeat(Math.max(0, 72 - visibleWidth(" Tagline : " + AppConfig.APP_TAGLINE)));
+        String sc1Row2 = Theme.render(cardBorder, "│") + sc1Tagline + Theme.render(cardBorder, "│");
+        lines.add(adminRow("  " + sc1Row2 + "  ", inner, frameStyle));
+
+        // Bottom
+        String sc1Bot = Theme.render(cardBorder, "└" + "─".repeat(72) + "┘");
+        lines.add(adminRow("  " + sc1Bot + "  ", inner, frameStyle));
+
+        lines.add(adminRow("", inner, frameStyle));
+
+        // -------------------------------------------------------------
+        // Sub-Card 2: [ AI ASSISTANT / OLLAMA ] (Total width: 74 chars)
+        // Col 1: 26, Col 2: 45 (26 + 1 + 45 = 72 inner)
+        // -------------------------------------------------------------
+        lines.add(adminRow("  " + Theme.render(Theme.headingCyan(), "[ AI ASSISTANT / OLLAMA ]"), inner, frameStyle));
+
+        String sc2Top = Theme.render(cardBorder, "┌" + "─".repeat(26) + "┬" + "─".repeat(45) + "┐");
+        lines.add(adminRow("  " + sc2Top + "  ", inner, frameStyle));
+
+        boolean aiOn = AppConfig.isAiEnabled();
+        String aiBadge = aiOn ? Theme.render(Theme.adminBadgeGreen(), "● Enabled") : Theme.render(Theme.adminBadgeYellow(), "○ Disabled");
+        String aiText = aiOn ? "● Enabled" : "○ Disabled";
+        String sc2Col1 = Theme.render(Theme.adminDim(), " Status   : ") + aiBadge + " ".repeat(Math.max(0, 26 - visibleWidth(" Status   : " + aiText)));
+        String sc2Col2 = Theme.render(Theme.adminDim(), " Model    : ") + Theme.render(Theme.adminText(), AppConfig.getOllamaModel()) + " ".repeat(Math.max(0, 45 - visibleWidth(" Model    : " + AppConfig.getOllamaModel())));
+        String sc2Row1 = Theme.render(cardBorder, "│") + sc2Col1 + Theme.render(cardBorder, "│") + sc2Col2 + Theme.render(cardBorder, "│");
+        lines.add(adminRow("  " + sc2Row1 + "  ", inner, frameStyle));
+
+        String sc2Row2Col1 = Theme.render(Theme.adminDim(), " Provider : ") + Theme.render(Theme.adminText(), "Local") + " ".repeat(Math.max(0, 26 - visibleWidth(" Provider : Local")));
+        String sc2Row2Col2 = Theme.render(Theme.adminDim(), " Endpoint : ") + Theme.render(Theme.adminText(), AppConfig.getOllamaBaseUrl()) + " ".repeat(Math.max(0, 45 - visibleWidth(" Endpoint : " + AppConfig.getOllamaBaseUrl())));
+        String sc2Row2 = Theme.render(cardBorder, "│") + sc2Row2Col1 + Theme.render(cardBorder, "│") + sc2Row2Col2 + Theme.render(cardBorder, "│");
+        lines.add(adminRow("  " + sc2Row2 + "  ", inner, frameStyle));
+
+        // Mid divider
+        String sc2Mid = Theme.render(cardBorder, "├" + "─".repeat(26) + "┴" + "─".repeat(45) + "┤");
+        lines.add(adminRow("  " + sc2Mid + "  ", inner, frameStyle));
+
+        // Row 3: Fallback note
+        String fallbackStr = "Automatic fallback to rule-based engine if offline";
+        String sc2Row3Content = Theme.render(Theme.adminDim(), " Fallback : ") + Theme.render(Theme.adminText(), fallbackStr) + " ".repeat(Math.max(0, 72 - visibleWidth(" Fallback : " + fallbackStr)));
+        String sc2Row3 = Theme.render(cardBorder, "│") + sc2Row3Content + Theme.render(cardBorder, "│");
+        lines.add(adminRow("  " + sc2Row3 + "  ", inner, frameStyle));
+
+        // Bottom
+        String sc2Bot = Theme.render(cardBorder, "└" + "─".repeat(72) + "┘");
+        lines.add(adminRow("  " + sc2Bot + "  ", inner, frameStyle));
+
+        lines.add(adminRow("", inner, frameStyle));
+
+        // -------------------------------------------------------------
+        // Sub-Card 3: [ VALIDATION CONSTRAINTS ] (Total width: 74 chars)
+        // Col 1: 34, Col 2: 37 (34 + 1 + 37 = 72 inner)
+        // -------------------------------------------------------------
+        lines.add(adminRow("  " + Theme.render(Theme.headingCyan(), "[ VALIDATION CONSTRAINTS ]"), inner, frameStyle));
+
+        String sc3Top = Theme.render(cardBorder, "┌" + "─".repeat(34) + "┬" + "─".repeat(37) + "┐");
+        lines.add(adminRow("  " + sc3Top + "  ", inner, frameStyle));
+
+        String pwdVal = AppConfig.MIN_PASSWORD_LENGTH + " ch";
+        String sc3Row1Col1 = Theme.render(Theme.adminDim(), " Password Min Length : ") + Theme.render(Theme.adminText(), pwdVal) + " ".repeat(Math.max(0, 34 - visibleWidth(" Password Min Length : " + pwdVal)));
+        String heightVal = String.format(Locale.ROOT, "%.1f - %.1f cm", AppConfig.MIN_HEIGHT_CM, AppConfig.MAX_HEIGHT_CM);
+        String sc3Row1Col2 = Theme.render(Theme.adminDim(), " Height Range : ") + Theme.render(Theme.adminText(), heightVal) + " ".repeat(Math.max(0, 37 - visibleWidth(" Height Range : " + heightVal)));
+        String sc3Row1 = Theme.render(cardBorder, "│") + sc3Row1Col1 + Theme.render(cardBorder, "│") + sc3Row1Col2 + Theme.render(cardBorder, "│");
+        lines.add(adminRow("  " + sc3Row1 + "  ", inner, frameStyle));
+
+        String ageVal = AppConfig.MIN_AGE + "-" + AppConfig.MAX_AGE;
+        String sc3Row2Col1 = Theme.render(Theme.adminDim(), " User Age Range      : ") + Theme.render(Theme.adminText(), ageVal) + " ".repeat(Math.max(0, 34 - visibleWidth(" User Age Range      : " + ageVal)));
+        String weightVal = String.format(Locale.ROOT, "%5.1f - %5.1f kg", AppConfig.MIN_WEIGHT_KG, AppConfig.MAX_WEIGHT_KG);
+        String sc3Row2Col2 = Theme.render(Theme.adminDim(), " Weight Range : ") + Theme.render(Theme.adminText(), weightVal) + " ".repeat(Math.max(0, 37 - visibleWidth(" Weight Range : " + weightVal)));
+        String sc3Row2 = Theme.render(cardBorder, "│") + sc3Row2Col1 + Theme.render(cardBorder, "│") + sc3Row2Col2 + Theme.render(cardBorder, "│");
+        lines.add(adminRow("  " + sc3Row2 + "  ", inner, frameStyle));
+
+        // Bottom
+        String sc3Bot = Theme.render(cardBorder, "└" + "─".repeat(34) + "┴" + "─".repeat(37) + "┘");
+        lines.add(adminRow("  " + sc3Bot + "  ", inner, frameStyle));
+
+        lines.add(adminRow("", inner, frameStyle));
+
+        // ENV Hint (clean, non-duplicated)
+        lines.add(adminRow("  " + Theme.render(Theme.adminDim(), "ENV: Set LIFEFORGE_OLLAMA_URL / LIFEFORGE_OLLAMA_MODEL to override."), inner, frameStyle));
+
+        // Status Feedback (if present)
+        if (status != null && !status.trim().isEmpty()) {
+            Style st = statusErr ? Theme.adminBadgeRed() : Theme.adminBadgeGreen();
+            lines.add(adminRow("  " + Theme.render(st, status), inner, frameStyle));
         }
-        String verb = resetApproveReject ? "approve" : "reject";
-        body.add(Line.of(Theme.warn(),
-                "  " + (resetApproveReject ? "Approve" : "Reject")
-                        + " password reset request #" + r.getId() + "?"));
-        body.add(Line.blank());
-        String[] labels = resetUserLabels.getOrDefault(r.getUserId(),
-                new String[] { "#" + r.getUserId(), "-" });
-        body.add(ScreenKit.labelValueStyled("User", labels[0], Theme.pivot()));
-        body.add(ScreenKit.labelValue("Requested",
-                r.getCreatedAt() == null ? "-" : r.getCreatedAt().format(RESET_DETAIL_TIME_FMT)));
-        if (r.getUserId() != null
-                && ctx.session.getCurrentUser() != null
-                && r.getUserId().equals(ctx.session.getCurrentUser().getId())) {
-            body.add(Line.of(Theme.err(),
-                    "  You cannot " + verb + " your own password reset request."));
-        }
-        body.add(Line.blank());
-        body.addAll(menuLines());
-        return "This action cannot be undone";
+
+        // Divider before footer
+        lines.add(adminDivider(inner, frameStyle));
+
+        // Consolidated command footer inside outer frame
+        String fRefresh = Theme.render(Theme.adminBadgeGreen(), "[R]") + " " + Theme.render(Theme.adminText(), "Test Connections");
+        String fBack = Theme.render(Theme.adminBadgePurple(), "[B]") + " " + Theme.render(Theme.adminText(), "Back");
+        String fHome = Theme.render(Theme.adminBadgeYellow(), "[H]") + " " + Theme.render(Theme.adminText(), "Home");
+        String fQuit = Theme.render(Theme.adminBadgeRed(), "[Q]") + " " + Theme.render(Theme.adminText(), "Quit");
+        String footerContent = "  " + fRefresh + "        " + fBack + "        " + fHome + "        " + fQuit;
+        lines.add(adminRow(footerContent, inner, frameStyle));
+
+        // Bottom outer border
+        lines.add(Theme.render(frameStyle, "└" + "─".repeat(inner) + "┘"));
+
+        return String.join("\n", lines);
     }
 
     private int auditDetailsWidth() {
@@ -5407,29 +8189,47 @@ public final class LifeForge implements Model {
 
     private Object[] auditActionLabel(String action) {
         if (action == null) {
-            return new Object[] { "-", Theme.dim() };
+            return new Object[] { "-", Theme.adminDim() };
         }
         switch (action.toUpperCase(Locale.ROOT).trim()) {
             case "LOGIN":
-                return new Object[] { "\uD83D\uDD10 LOGIN", Theme.dim() };
-            case "PASSWORD_RESET", "PASSWORD_RESET_REQUESTED", "RESET_REQUEST":
-                return new Object[] { "\uD83D\uDD11 RESET REQUEST", Theme.pivot() };
+                return new Object[] { "LOGIN", Theme.adminBadgeGreen() };
+            case "PASSWORD_RESET", "PASSWORD_RESET_REQUESTED", "RESET_REQUEST", "RESET_REQ":
+                return new Object[] { "RESET_REQ", Theme.adminBadgeYellow() };
             case "PASSWORD_RESET_REQUEST_APPROVED", "RESET_APPROVED":
-                return new Object[] { "\u2713 RESET APPROVED", Theme.ok() };
+                return new Object[] { "RESET_APPROVED", Theme.adminBadgeGreen() };
             case "PASSWORD_RESET_REQUEST_REJECTED", "RESET_REJECTED":
-                return new Object[] { "\u274C RESET REJECTED", Theme.err() };
-            case "PASSWORD_RESET_COMPLETED", "RESET_COMPLETED":
-                return new Object[] { "\u2713 RESET COMPLETED", Theme.ok() };
-            case "USER_BLOCKED", "BLOCK_USER":
-                return new Object[] { "\u26A0 USER BLOCKED", Theme.warn() };
-            case "USER_UNBLOCKED", "UNBLOCK_USER":
-                return new Object[] { "\u2713 USER UNBLOCKED", Theme.ok() };
-            case "USER_DELETED":
-                return new Object[] { "\u2715 USER DELETED", Theme.err() };
+                return new Object[] { "RESET_REJECTED", Theme.adminBadgeRed() };
+            case "PASSWORD_RESET_COMPLETED", "RESET_COMPLETED", "RESET_DONE":
+                return new Object[] { "RESET_DONE", Theme.adminBadgeGreen() };
+            case "USER_BLOCKED", "BLOCK_USER", "USER_LOCK":
+                return new Object[] { "USER_LOCK", Theme.adminBadgeRed() };
+            case "USER_UNBLOCKED", "UNBLOCK_USER", "USER_UNLOCK":
+                return new Object[] { "USER_UNLOCK", Theme.adminBadgeGreen() };
+            case "USER_DELETED", "DELETE_USER":
+                return new Object[] { "USER_DEL", Theme.adminBadgeRed() };
             case "ROLE_CHANGED":
-                return new Object[] { "\u2699 ROLE CHANGED", Theme.warn() };
+                return new Object[] { "ROLE_CHANGE", Theme.adminBadgePurple() };
+            case "REC_CREATE", "RECOMMENDATION_CREATE":
+                return new Object[] { "REC_CREATE", Theme.adminBadgeGreen() };
+            case "REC_UPDATE", "RECOMMENDATION_UPDATE":
+                return new Object[] { "REC_UPDATE", Theme.adminBadgeYellow() };
+            case "REC_DELETE", "RECOMMENDATION_DELETE":
+                return new Object[] { "REC_DEL", Theme.adminBadgeRed() };
+            case "GOAL_CREATE":
+                return new Object[] { "GOAL_CREATE", Theme.adminBadgeGreen() };
+            case "GOAL_UPDATE":
+                return new Object[] { "GOAL_UPDATE", Theme.adminBadgeYellow() };
+            case "GOAL_DELETE":
+                return new Object[] { "GOAL_DEL", Theme.adminBadgeRed() };
+            case "CAT_CREATE":
+                return new Object[] { "CAT_CREATE", Theme.adminBadgeGreen() };
+            case "CAT_UPDATE":
+                return new Object[] { "CAT_UPDATE", Theme.adminBadgeYellow() };
+            case "CAT_DELETE":
+                return new Object[] { "CAT_DEL", Theme.adminBadgeRed() };
             default:
-                return new Object[] { action.replace('_', ' '), Theme.text() };
+                return new Object[] { action.toUpperCase(Locale.ROOT).replace(' ', '_'), Theme.adminDim() };
         }
     }
 
@@ -5459,8 +8259,6 @@ public final class LifeForge implements Model {
         body.add(ScreenKit.labelValue("Weight range",
                 AppConfig.MIN_WEIGHT_KG + " - " + AppConfig.MAX_WEIGHT_KG + " kg"));
         body.add(Line.blank());
-        body.add(Line.of(Theme.dim(),
-                "  Set LIFEFORGE_OLLAMA_URL / LIFEFORGE_OLLAMA_MODEL to customize, or"));
         body.add(Line.of(Theme.dim(),
                 "  Set LIFEFORGE_OLLAMA_URL / LIFEFORGE_OLLAMA_MODEL to customize, or"));
         body.add(Line.of(Theme.dim(),
@@ -5565,6 +8363,9 @@ public final class LifeForge implements Model {
     // Small renderers
     // ------------------------------------------------------------------
     private List<Line> menuLines() {
+        if (screen == Screen.RECOMMEND_DETAIL) {
+            return ScreenKit.menuHorizontal(menuLabels, sel, width - 2);
+        }
         return ScreenKit.menu(menuLabels, sel, width - 2);
     }
 
@@ -5718,7 +8519,14 @@ public final class LifeForge implements Model {
     private List<String[]> footer() {
         List<String[]> out = new ArrayList<>();
         switch (screen) {
-            case LOGIN, REGISTER, FORGOT_PASSWORD, VERIFY_CODE, NEW_PASSWORD,
+            case WELCOME -> {
+                out.add(new String[] { "←/→", "Select" });
+                out.add(new String[] { "Enter", "Open" });
+                out.add(new String[] { "L", "Login" });
+                out.add(new String[] { "R", "Register" });
+                out.add(new String[] { "Q", "Quit" });
+            }
+            case LOGIN, REGISTER, FORGOT_PASSWORD, VERIFY_CODE,
                  PROFILE_EDIT, PROFILE_PASSWORD, ADMIN_SEARCH, ADMIN_AUDIT_SEARCH,
                  ADMIN_REC_FORM, ADMIN_GOAL_FORM, ADMIN_CAT_FORM -> {
                 out.add(new String[] { "Up/Down/Tab", "Move field" });
@@ -5757,9 +8565,11 @@ public final class LifeForge implements Model {
                 out.add(new String[] { "Q", "Quit" });
             }
             case RECOMMEND_DETAIL -> {
-                out.add(new String[] { "Up/Down", "Choose" });
                 if (isCurrentMasterRoutine()) {
+                    out.add(new String[] { "Up/Down", "Choose" });
                     out.add(new String[] { "Left/Right", "Page" });
+                } else {
+                    out.add(new String[] { "Left/Right", "Select" });
                 }
                 out.add(new String[] { "Enter", "Open / action" });
                 out.add(new String[] { "B", "Back" });
@@ -5773,8 +8583,22 @@ public final class LifeForge implements Model {
                 out.add(new String[] { "H", "Home" });
                 out.add(new String[] { "Q", "Quit" });
             }
-            case GOAL_SELECT, SAVED, PROFILE, ADMIN_USER_ACTIONS, RESET_SUCCESS,
-                 RESET_STATUS, RESET_APPROVED -> {
+            case SAVED -> {
+                out.add(new String[] { "↑/↓", "Navigate" });
+                out.add(new String[] { "Enter", "Open & Manage" });
+                out.add(new String[] { "B", "Back" });
+                out.add(new String[] { "H", "Home" });
+                out.add(new String[] { "Q", "Quit" });
+            }
+            case PROFILE -> {
+                out.add(new String[] { "E", "Edit" });
+                out.add(new String[] { "P", "Password" });
+                out.add(new String[] { "D", "Delete" });
+                out.add(new String[] { "B", "Back" });
+                out.add(new String[] { "H", "Home" });
+                out.add(new String[] { "Q", "Quit" });
+            }
+            case GOAL_SELECT, ADMIN_USER_ACTIONS -> {
                 out.add(new String[] { "Up/Down", "Choose" });
                 out.add(new String[] { "Enter", "Select" });
                 out.add(new String[] { "B", "Back" });
@@ -5821,50 +8645,31 @@ public final class LifeForge implements Model {
                 }
             }
 
-            case ADMIN_GOALS, ADMIN_CATS -> {
-                out.add(new String[] { "Up/Down", "Select" });
-                out.add(new String[] { "Left/Right", "Page" });
-                out.add(new String[] { "Enter", "Edit" });
-                out.add(new String[] { "N", "New" });
-                out.add(new String[] { "D", "Delete" });
-                out.add(new String[] { "B", "Back" });
-                out.add(new String[] { "H", "Home" });
-                out.add(new String[] { "Q", "Quit" });
+            case ADMIN_GOALS -> {
+                out.add(new String[] { "[↑/↓]", "Row" });
+                out.add(new String[] { "[Enter]", "Edit" });
+                out.add(new String[] { "[N]", "New" });
+                out.add(new String[] { "[T]", "Toggle" });
+                out.add(new String[] { "[D]", "Del" });
+                out.add(new String[] { "[B]", "Back" });
+            }
+            case ADMIN_CATS -> {
+                out.add(new String[] { "[↑/↓]", "Row" });
+                out.add(new String[] { "[Enter]", "Edit" });
+                out.add(new String[] { "[N]", "New" });
+                out.add(new String[] { "[T]", "Toggle" });
+                out.add(new String[] { "[D]", "Del" });
+                out.add(new String[] { "[B]", "Back" });
             }
             case ADMIN_USERS -> {
-                out.add(new String[] { "Up/Down", "Select" });
-                out.add(new String[] { "Left/Right", "Page" });
-                out.add(new String[] { "Enter", "Details" });
-                out.add(new String[] { "S", "Search" });
-                out.add(new String[] { "X", "Clear Filter" });
-                out.add(new String[] { "B", "Back" });
-                out.add(new String[] { "H", "Home" });
-                out.add(new String[] { "Q", "Quit" });
-            }
-            case ADMIN_RESET_REQUESTS -> {
-                out.add(new String[] { "Up/Down", "Select" });
-                out.add(new String[] { "Left/Right", "Page" });
-                out.add(new String[] { "Enter", "Details" });
-                out.add(new String[] { "A", "Approve" });
-                out.add(new String[] { "R", "Reject" });
-                out.add(new String[] { "F", "Refresh" });
-                out.add(new String[] { "B", "Back" });
-                out.add(new String[] { "H", "Home" });
-                out.add(new String[] { "Q", "Quit" });
-            }
-            case ADMIN_RESET_DETAIL -> {
-                out.add(new String[] { "Up/Down", "Choose action" });
-                out.add(new String[] { "Enter", "Run action" });
-                out.add(new String[] { "B", "Back" });
-                out.add(new String[] { "H", "Home" });
-                out.add(new String[] { "Q", "Quit" });
-            }
-            case ADMIN_RESET_CONFIRM -> {
-                out.add(new String[] { "Up/Down", "Choose" });
-                out.add(new String[] { "Enter", "Confirm / Cancel" });
-                out.add(new String[] { "B", "Back" });
-                out.add(new String[] { "H", "Home" });
-                out.add(new String[] { "Q", "Quit" });
+                out.add(new String[] { "[U]", "Up/Down Select" });
+                out.add(new String[] { "[L]", "Left/Right Page" });
+                out.add(new String[] { "[E]", "Enter Details" });
+                out.add(new String[] { "[S]", "Search" });
+                out.add(new String[] { "[X]", "Clear Filter" });
+                out.add(new String[] { "[B]", "Back" });
+                out.add(new String[] { "[H]", "Home" });
+                out.add(new String[] { "[Q]", "Quit" });
             }
             case ADMIN_ANALYTICS -> {
                 out.add(new String[] { "R", "Refresh" });
@@ -5873,13 +8678,11 @@ public final class LifeForge implements Model {
                 out.add(new String[] { "Q", "Quit" });
             }
             case ADMIN_AUDIT -> {
-                out.add(new String[] { "↑↓", "Select" });
-                out.add(new String[] { "←→", "Page" });
+                out.add(new String[] { "↑/↓", "Row" });
+                out.add(new String[] { "Enter", "View Details" });
                 out.add(new String[] { "S", "Search" });
                 out.add(new String[] { "R", "Refresh" });
                 out.add(new String[] { "B", "Back" });
-                out.add(new String[] { "H", "Home" });
-                out.add(new String[] { "Q", "Quit" });
             }
             case ADMIN_AUDIT_DETAIL -> {
                 out.add(new String[] { "B/Esc", "Back" });
@@ -5903,7 +8706,13 @@ public final class LifeForge implements Model {
                 out.add(new String[] { "H", "Home" });
                 out.add(new String[] { "Q", "Quit" });
             }
-            case EXPLANATION, ADMIN_SETTINGS -> {
+            case ADMIN_SETTINGS -> {
+                out.add(new String[] { "R", "Test Connections" });
+                out.add(new String[] { "B", "Back" });
+                out.add(new String[] { "H", "Home" });
+                out.add(new String[] { "Q", "Quit" });
+            }
+            case EXPLANATION -> {
                 out.add(new String[] { "B", "Back" });
                 out.add(new String[] { "H", "Home" });
                 out.add(new String[] { "Q", "Quit" });
@@ -5922,7 +8731,7 @@ public final class LifeForge implements Model {
     // ------------------------------------------------------------------
     private boolean isFormScreen() {
         return switch (screen) {
-            case LOGIN, REGISTER, FORGOT_PASSWORD, VERIFY_CODE, NEW_PASSWORD,
+            case LOGIN, REGISTER, FORGOT_PASSWORD, VERIFY_CODE,
                  PROFILE_EDIT, PROFILE_PASSWORD, ADMIN_SEARCH, ADMIN_AUDIT_SEARCH,
                  ADMIN_REC_FORM, ADMIN_GOAL_FORM, ADMIN_CAT_FORM -> true;
             case ADMIN_REC_SEARCH -> !recSearchResultsMode;
@@ -6076,8 +8885,12 @@ public final class LifeForge implements Model {
     }
 
     private static boolean isMasterRoutine(String name) {
+        if (name == null) return false;
         String lower = name.toLowerCase(Locale.ROOT);
-        return lower.contains("master") || lower.contains("routine");
+        if (lower.contains("master")) return true;
+        return lower.contains("routine") && !lower.contains("cardio") && !lower.contains("strength")
+                && !lower.contains("exercise") && !lower.contains("workout") && !lower.contains("training")
+                && !lower.contains("bedtime") && !lower.contains("sleep");
     }
 
     private static boolean isWhyThisRecommendation(String name) {

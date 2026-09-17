@@ -105,6 +105,10 @@ public class User {
         return heightCm;
     }
 
+    public Double getHeight() {
+        return heightCm != null ? heightCm : 0.0;
+    }
+
     public void setHeightCm(Double heightCm) {
         this.heightCm = heightCm;
     }
@@ -113,8 +117,20 @@ public class User {
         return weightKg;
     }
 
+    public Double getWeight() {
+        return weightKg != null ? weightKg : 0.0;
+    }
+
     public void setWeightKg(Double weightKg) {
         this.weightKg = weightKg;
+    }
+
+    public Double getBmi() {
+        if (heightCm == null || weightKg == null || heightCm <= 0 || weightKg <= 0) {
+            return 0.0;
+        }
+        double hM = heightCm / 100.0;
+        return weightKg / (hM * hM);
     }
 
     public ActivityLevel getActivityLevel() {

@@ -177,8 +177,12 @@ public class UserDao {
         return users;
     }
 
+    /**
+     * Counts all standard member accounts, excluding administrators,
+     * to match the User Management screen and platform member KPIs.
+     */
     public long countAll() throws SQLException {
-        String sql = "SELECT COUNT(*) FROM users";
+        String sql = "SELECT COUNT(*) FROM users WHERE role != 'ADMIN'";
         try (Connection conn = DatabaseConfig.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql);
              ResultSet rs = ps.executeQuery()) {
@@ -187,8 +191,24 @@ public class UserDao {
         }
     }
 
+    /**
+     * Counts active member accounts (unblocked and non-admin).
+     */
     public long countActiveUsers() throws SQLException {
-        String sql = "SELECT COUNT(*) FROM users WHERE blocked = FALSE AND role = 'USER'";
+        String sql = "SELECT COUNT(*) FROM users WHERE blocked = FALSE AND role != 'ADMIN'";
+        try (Connection conn = DatabaseConfig.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            rs.next();
+            return rs.getLong(1);
+        }
+    }
+
+    /**
+     * Counts all rows in the users table, including administrators.
+     */
+    public long countAllIncludingAdmins() throws SQLException {
+        String sql = "SELECT COUNT(*) FROM users";
         try (Connection conn = DatabaseConfig.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql);
              ResultSet rs = ps.executeQuery()) {

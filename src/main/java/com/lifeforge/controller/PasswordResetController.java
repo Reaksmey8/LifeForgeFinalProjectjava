@@ -15,8 +15,8 @@ public class PasswordResetController extends BaseController {
         this.passwordResetService = passwordResetService;
     }
 
-    public PasswordResetService.RequestResult startReset(String email) {
-        PasswordResetService.RequestResult result = passwordResetService.requestReset(email);
+    public PasswordResetService.RequestResult startReset(String usernameOrEmail) {
+        PasswordResetService.RequestResult result = passwordResetService.requestReset(usernameOrEmail);
         if (!result.accepted) {
             setError(result.message);
         }
@@ -39,6 +39,15 @@ public class PasswordResetController extends BaseController {
         return result.success;
     }
 
+    public boolean resetPassword(Long userId, String code, String newPassword, String confirmPassword) {
+        PasswordResetService.ResetResult result =
+                passwordResetService.resetPassword(userId, code, newPassword, confirmPassword);
+        if (!result.success) {
+            setError(result.message);
+        }
+        return result.success;
+    }
+
     public boolean resetPassword(Long userId, String newPassword, String confirmPassword) {
         PasswordResetService.ResetResult result =
                 passwordResetService.resetPassword(userId, newPassword, confirmPassword);
@@ -51,5 +60,9 @@ public class PasswordResetController extends BaseController {
     /** Dev-only plaintext code used for the on-screen hint; null in production. */
     public String devLastCode(Long userId) {
         return passwordResetService.devLastCode(userId);
+    }
+
+    public String getActiveCode(Long userId) {
+        return passwordResetService.getActiveCode(userId);
     }
 }

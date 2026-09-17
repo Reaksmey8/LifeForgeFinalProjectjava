@@ -2,7 +2,6 @@ package com.lifeforge;
 
 import com.lifeforge.config.DatabaseConfig;
 import com.lifeforge.dao.AuditLogDao;
-import com.lifeforge.dao.PasswordResetDao;
 import com.lifeforge.dao.UserDao;
 import com.lifeforge.model.ActivityLevel;
 import com.lifeforge.model.Gender;
@@ -12,6 +11,8 @@ import com.lifeforge.service.AdminService;
 import com.lifeforge.service.AuditLogService;
 import com.lifeforge.service.CodeDeliveryService;
 import com.lifeforge.service.PasswordResetService;
+import com.lifeforge.service.PasswordResetService.RequestResult;
+import com.lifeforge.service.PasswordResetService.ResetResult;
 import com.lifeforge.util.PasswordUtil;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -27,17 +28,13 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Verifies the admin-side approval state machine for password reset requests
- * against a live PostgreSQL database. Skipped when the database is unreachable.
- *
- * <p>Every account it creates (one administrator + one ordinary user) is
- * deleted again in clean-up, matching the same hygiene rules as
- * {@link PasswordResetServiceTest}.
+ * Verifies that password resets no longer require administrative manual approval,
+ * and that administrative account status (such as block/unblock) properly controls
+ * reset eligibility.
  */
 class AdminResetApprovalTest {
 
@@ -47,7 +44,6 @@ class AdminResetApprovalTest {
 
     private static AdminService adminService;
     private static PasswordResetService resetService;
-    private static PasswordResetDao resetDao;
     private static UserDao userDao;
     private static User admin;
     private static User target;
@@ -60,12 +56,13 @@ class AdminResetApprovalTest {
         boolean dbUp = DatabaseConfig.testConnection();
         Assumptions.assumeTrue(dbUp, "PostgreSQL not reachable; skipping admin approval tests.");
 
+        System.setProperty("lifeforge.dev.code.log", "true");
+
         userDao = new UserDao();
-        resetDao = new PasswordResetDao();
         AuditLogService auditLogService = new AuditLogService(new AuditLogDao());
-        adminService = new AdminService(userDao, auditLogService, resetDao);
+        adminService = new AdminService(userDao, auditLogService);
         CodeDeliveryService delivery = (destination, code) -> { };
-        resetService = new PasswordResetService(resetDao, userDao, auditLogService, delivery);
+        resetService = new PasswordResetService(userDao, auditLogService, delivery);
 
         purgeLeftoverTestUsers();
     }
@@ -101,38 +98,20 @@ class AdminResetApprovalTest {
             cleanupUser(id);
         }
         createdUserIds.clear();
-    }
-
-    private static User newUser(String fullName, String email, Role role) {
-        User user = new User();
-        user.setFullName(fullName);
-        user.setEmail(email);
-        user.setUsername(null);
-        user.setPasswordHash(PasswordUtil.hash("OldPassw0rd"));
-        user.setAge(30);
-        user.setGender(Gender.MALE);
-        user.setHeightCm(175.0);
-        user.setWeightKg(70.0);
-        user.setActivityLevel(ActivityLevel.MODERATELY_ACTIVE);
-        user.setRole(role);
-        user.setBlocked(false);
-        return user;
+        System.clearProperty("lifeforge.dev.code.log");
     }
 
     private static void purgeLeftoverTestUsers() throws SQLException {
         for (User u : userDao.findAll()) {
-            if (isTesterAccount(u)) {
+            if (isTestAccount(u)) {
                 cleanupUser(u.getId());
             }
         }
     }
 
-    private static boolean isTesterAccount(User u) {
+    private static boolean isTestAccount(User u) {
         String email = u.getEmail();
-        boolean isThisSuite = TARGET_FULL_NAME.equals(u.getFullName())
-                || ADMIN_FULL_NAME.equals(u.getFullName());
-        return (u.getRole() == Role.USER || u.getRole() == Role.ADMIN)
-                && isThisSuite
+        return (ADMIN_FULL_NAME.equals(u.getFullName()) || TARGET_FULL_NAME.equals(u.getFullName()))
                 && email != null
                 && email.startsWith("reset_")
                 && email.endsWith(TEST_EMAIL_DOMAIN);
@@ -142,113 +121,63 @@ class AdminResetApprovalTest {
         if (userId == null || !cleanedIds.add(userId)) {
             return;
         }
-        resetDao.invalidateForUser(userId);
         userDao.delete(userId);
     }
 
-    private Long latestRequestId(Long userId) throws SQLException {
-        return resetDao.findLatestByUser(userId).orElseThrow().getId();
-    }
-
-    private void requestResetFor(Long userId) throws SQLException {
-        String email = userDao.findById(userId).orElseThrow().getEmail();
-        var result = resetService.requestReset(email);
-        assertTrue(result.accepted);
-    }
-
-    @Test
-    void nonAdminCannotApprove() {
-        AdminService.AdminActionResult result =
-                adminService.approveResetRequest(target, 1L);
-        assertFalse(result.success);
-        assertTrue(result.message.contains("admin role required"));
+    private static User newUser(String fullName, String email, Role role) {
+        User u = new User();
+        u.setFullName(fullName);
+        u.setEmail(email);
+        u.setPasswordHash(PasswordUtil.hash("InitialPass123"));
+        u.setAge(30);
+        u.setGender(Gender.FEMALE);
+        u.setHeightCm(165.0);
+        u.setWeightKg(58.0);
+        u.setActivityLevel(ActivityLevel.LIGHTLY_ACTIVE);
+        u.setRole(role);
+        u.setBlocked(false);
+        return u;
     }
 
     @Test
-    void nonAdminCannotReject() {
-        AdminService.AdminActionResult result =
-                adminService.rejectResetRequest(target, 1L);
-        assertFalse(result.success);
-        assertTrue(result.message.contains("admin role required"));
+    void userResetsPasswordDirectlyWithoutAdminIntervention() throws Exception {
+        // User initiates reset
+        RequestResult req = resetService.requestReset(target.getEmail());
+        assertTrue(req.accepted, "Reset request should be accepted without admin queuing");
+
+        String code = resetService.devLastCode(target.getId());
+
+        // User directly verifies and resets without admin approval
+        ResetResult reset = resetService.resetPassword(target.getId(), code, "DirectNewPass123", "DirectNewPass123");
+        assertTrue(reset.success, "Password reset must succeed directly without requiring admin approval");
+
+        User updated = userDao.findById(target.getId()).orElseThrow();
+        assertTrue(PasswordUtil.verify("DirectNewPass123", updated.getPasswordHash()));
     }
 
     @Test
-    void adminCannotDecideOnOwnRequest() throws SQLException {
-        requestResetFor(admin.getId());
-        Long id = latestRequestId(admin.getId());
+    void adminBlockingUserPreventsPasswordReset() throws Exception {
+        // Admin blocks user account
+        AdminService.AdminActionResult blockResult = adminService.blockUser(admin, target.getId());
+        assertTrue(blockResult.success, "Admin should be able to block user");
 
-        AdminService.AdminActionResult approve =
-                adminService.approveResetRequest(admin, id);
-        assertFalse(approve.success);
-        assertTrue(approve.message.contains("own"));
-
-        AdminService.AdminActionResult reject =
-                adminService.rejectResetRequest(admin, id);
-        assertFalse(reject.success);
-        assertTrue(reject.message.contains("own"));
+        // User tries to request reset -> rejected because account is blocked
+        RequestResult req = resetService.requestReset(target.getEmail());
+        assertFalse(req.accepted, "Blocked user must not be allowed to request password reset");
+        assertTrue(req.message.contains("blocked"));
     }
 
     @Test
-    void approveMarksRequestApproved() throws SQLException {
-        requestResetFor(target.getId());
-        Long id = latestRequestId(target.getId());
+    void adminUnblockingUserRestoresPasswordResetEligibility() throws Exception {
+        // First block
+        adminService.blockUser(admin, target.getId());
 
-        AdminService.AdminActionResult result =
-                adminService.approveResetRequest(admin, id);
-        assertTrue(result.success, result.message);
-        assertEquals(PasswordResetService.STATUS_APPROVED,
-                resetDao.findById(id).orElseThrow().getStatus());
-    }
+        // Then unblock
+        AdminService.AdminActionResult unblockResult = adminService.unblockUser(admin, target.getId());
+        assertTrue(unblockResult.success, "Admin should be able to unblock user");
 
-    @Test
-    void rejectMarksRequestRejected() throws SQLException {
-        requestResetFor(target.getId());
-        Long id = latestRequestId(target.getId());
-
-        AdminService.AdminActionResult result =
-                adminService.rejectResetRequest(admin, id);
-        assertTrue(result.success, result.message);
-        assertEquals(PasswordResetService.STATUS_REJECTED,
-                resetDao.findById(id).orElseThrow().getStatus());
-    }
-
-    @Test
-    void onlyPendingRequestCanBeDecided() throws SQLException {
-        requestResetFor(target.getId());
-        Long id = latestRequestId(target.getId());
-
-        assertTrue(adminService.approveResetRequest(admin, id).success);
-
-        AdminService.AdminActionResult secondApprove =
-                adminService.approveResetRequest(admin, id);
-        assertFalse(secondApprove.success);
-        assertTrue(secondApprove.message.contains("Only pending"));
-
-        AdminService.AdminActionResult rejectAfterApprove =
-                adminService.rejectResetRequest(admin, id);
-        assertFalse(rejectAfterApprove.success);
-        assertTrue(rejectAfterApprove.message.contains("Only pending"));
-    }
-
-    @Test
-    void missingRequestIdIsRejected() {
-        AdminService.AdminActionResult result =
-                adminService.approveResetRequest(admin, null);
-        assertFalse(result.success);
-    }
-
-    @Test
-    void approvedRequestAllowsPasswordReset() throws SQLException {
-        requestResetFor(target.getId());
-        Long id = latestRequestId(target.getId());
-        assertTrue(adminService.approveResetRequest(admin, id).success);
-
-        var reset = resetService.resetPassword(
-                target.getId(), "BrandNew456", "BrandNew456");
-        assertTrue(reset.success);
-        assertTrue(PasswordUtil.verify("BrandNew456",
-                userDao.findById(target.getId()).orElseThrow().getPasswordHash()));
-        assertEquals(PasswordResetService.STATUS_COMPLETED,
-                resetDao.findById(id).orElseThrow().getStatus());
+        // User can now request reset
+        RequestResult req = resetService.requestReset(target.getEmail());
+        assertTrue(req.accepted, "Unblocked user should now be eligible to reset password");
     }
 }

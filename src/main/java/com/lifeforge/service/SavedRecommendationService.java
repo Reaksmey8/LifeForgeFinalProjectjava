@@ -5,6 +5,7 @@ import com.lifeforge.model.SavedRecommendation;
 
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Business logic for saving/viewing/deleting a user's saved
@@ -36,10 +37,32 @@ public class SavedRecommendationService {
         }
     }
 
+    public boolean isAlreadySaved(Long userId, Long recommendationId) {
+        try {
+            return savedRecommendationDao.alreadySaved(userId, recommendationId);
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
     public SaveResult saveRecommendation(Long userId, Long recommendationId) {
         try {
+            Optional<SavedRecommendation> existingInCat = Optional.empty();
+            try {
+                existingInCat = savedRecommendationDao.findSavedBySameCategory(userId, recommendationId);
+            } catch (Exception ignored) {
+                // If DB query fails or in mock environment, fallback to alreadySaved check
+            }
+
+            if (existingInCat.isPresent()) {
+                SavedRecommendation existing = existingInCat.get();
+                savedRecommendationDao.updateSavedRecommendation(existing.getId(), recommendationId);
+                return SaveResult.ok("Recommendation saved to your list. *");
+            }
+
             if (savedRecommendationDao.alreadySaved(userId, recommendationId)) {
-                return SaveResult.fail("You have already saved this recommendation.");
+                savedRecommendationDao.updateSavedAt(userId, recommendationId);
+                return SaveResult.ok("Recommendation already saved; timestamp updated.");
             }
             savedRecommendationDao.save(userId, recommendationId);
             return SaveResult.ok("Recommendation saved successfully.");

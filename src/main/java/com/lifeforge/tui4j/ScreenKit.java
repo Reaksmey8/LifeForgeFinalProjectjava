@@ -83,17 +83,17 @@ public final class ScreenKit {
 
         StringBuilder out = new StringBuilder();
         int visible = 0;
-        for (int i = 0; i < plain.length() && visible < maxWidth; ) {
-            int cp = plain.codePointAt(i);
-            int w = Character.charCount(cp);
-            String ch = new String(Character.toChars(cp));
-            int cw = Theme.width(ch);
+        java.text.BreakIterator charIter = java.text.BreakIterator.getCharacterInstance();
+        charIter.setText(plain);
+        int start = charIter.first();
+        for (int end = charIter.next(); end != java.text.BreakIterator.DONE && visible < maxWidth; start = end, end = charIter.next()) {
+            String cluster = plain.substring(start, end);
+            int cw = Theme.width(cluster);
             if (visible + cw > maxWidth) {
                 break;
             }
-            out.append(ch);
+            out.append(cluster);
             visible += cw;
-            i += w;
         }
         return out.toString();
     }
@@ -234,15 +234,17 @@ public final class ScreenKit {
     }
 
     public static Line labelValue(String label, String value) {
-        String k = Theme.padRight("   " + label + ":", 18);
+        String prefix = "   " + label + ": ";
+        int pad = Math.max(0, 24 - Theme.width(prefix));
         String v = (value == null || value.isEmpty()) ? "-" : value;
-        return new Line(Theme.text(), k + v);
+        return new Line(Theme.text(), prefix + " ".repeat(pad) + v);
     }
 
     public static Line labelValueStyled(String label, String value, Style valueStyle) {
-        String k = Theme.padRight("   " + label + ":", 18);
+        String prefix = "   " + label + ": ";
+        int pad = Math.max(0, 24 - Theme.width(prefix));
         String v = (value == null || value.isEmpty()) ? "-" : value;
-        return new Line(valueStyle, k + v);
+        return new Line(valueStyle, prefix + " ".repeat(pad) + v);
     }
 
     // ------------------------------------------------------------------
@@ -289,6 +291,88 @@ public final class ScreenKit {
         return out;
     }
 
+    /**
+     * Renders a single-line horizontal action menu with distinct boxed buttons.
+     * Each button is enclosed in bracket styling, e.g. [ 💾 Save Recommendation ],
+     * with spacious gap spacing between buttons so they do not look adjacent.
+     * The focused item is indicated with a "> " selection pointer.
+     * For example:
+     *   "  > [ 💾 Save Recommendation ]    [ 💡 Why This? ]    [ 🤖 Chat with AI ]    [ — Back ]"
+     */
+    public static List<Line> menuHorizontal(List<String> labels, int selected, int inner) {
+        if (labels == null || labels.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        List<String> btnBoxes = new ArrayList<>();
+        int sumW = 0;
+        for (String l : labels) {
+            String lbl = menuLabel(l);
+            String displayLabel = lbl.equals("⬅️ Back") ? "— Back" : lbl;
+            String box = "[ " + displayLabel + " ]";
+            btnBoxes.add(box);
+            sumW += Theme.width(box);
+        }
+
+        int numButtons = btnBoxes.size();
+        int numGaps = numButtons - 1;
+
+        int gap;
+        int leftMargin;
+
+        if (numGaps > 0 && sumW + 2 + numGaps * 4 <= inner) {
+            gap = 4;
+            leftMargin = 2;
+        } else if (numGaps > 0 && sumW + 2 + numGaps * 3 <= inner) {
+            gap = 3;
+            leftMargin = 2;
+        } else if (numGaps > 0 && sumW + 2 + numGaps * 2 <= inner) {
+            gap = 2;
+            leftMargin = 2;
+        } else if (numGaps > 0 && sumW + 1 + numGaps * 2 <= inner) {
+            gap = 2;
+            leftMargin = 1;
+        } else if (numGaps > 0 && sumW + 1 + numGaps * 1 <= inner) {
+            gap = 1;
+            leftMargin = 1;
+        } else if (sumW <= inner) {
+            gap = 1;
+            leftMargin = 0;
+        } else {
+            // Fallback to vertical menu if page is too narrow
+            return menu(labels, selected, inner);
+        }
+
+        StringBuilder sb = new StringBuilder();
+
+        // Left margin / cursor before button 0
+        if (leftMargin >= 2) {
+            sb.append(selected == 0 ? "> " : "  ");
+        } else if (leftMargin == 1) {
+            sb.append(selected == 0 ? ">" : " ");
+        }
+
+        for (int i = 0; i < numButtons; i++) {
+            sb.append(btnBoxes.get(i));
+            if (i < numButtons - 1) {
+                boolean nextSelected = (selected == i + 1);
+                if (nextSelected) {
+                    if (gap >= 3) {
+                        sb.append(" ".repeat(gap - 2)).append("> ");
+                    } else if (gap == 2) {
+                        sb.append(" >");
+                    } else {
+                        sb.append(">");
+                    }
+                } else {
+                    sb.append(" ".repeat(gap));
+                }
+            }
+        }
+
+        return List.of(Line.of(Theme.text(), sb.toString()));
+    }
+
     /** Presentation-only icons for primary navigation and recommendation actions. */
     private static String menuLabel(String label) {
         if (label == null || label.isBlank()) {
@@ -302,14 +386,16 @@ public final class ScreenKit {
             case "Manage Users" -> "👥 Manage Users";
             case "Recommendation CMS" -> "💡 Recommendation CMS";
             case "Manage Goals" -> "🎯 Manage Goals";
-            case "Manage Categories" -> "🗂 Manage Categories";
+            case "Manage Categories" -> "📁 Manage Categories";
             case "Analytics" -> "📊 Analytics";
             case "Audit Logs" -> "📝 Audit Logs";
-            case "System Settings" -> "⚙ Settings";
-            case "Save This Recommendation" -> "💾 Save This Recommendation";
+            case "System Settings" -> "🔧 System Settings";
+            case "Save This Recommendation", "Save Recommendation", "💾 Save Recommendation" -> "💾 Save Recommendation";
             case "LIFEForge Recommendation" -> "💡 LIFEForge Recommendation";
             case "Chat with AI" -> "🤖 Chat with AI";
-            case "Why This Recommendation?" -> "💡 Why This Recommendation?";
+            case "Why This Recommendation?", "Why This?" -> "💡 Why This?";
+            case "Back to Plan", "⬅️ Back" -> "⬅️ Back";
+            case "— Back" -> "— Back";
             case "Back" -> "🔙 Back";
             default -> label;
         };

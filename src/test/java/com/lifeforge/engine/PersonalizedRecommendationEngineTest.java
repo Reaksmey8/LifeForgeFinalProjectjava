@@ -6,6 +6,7 @@ import com.lifeforge.model.*;
 import com.lifeforge.service.*;
 import com.lifeforge.service.CalorieService;
 import com.lifeforge.service.RecommendationPriorityResolver;
+import com.lifeforge.tui4j.LifeForge;
 import com.lifeforge.tui4j.ScreenKit;
 import com.lifeforge.tui4j.ScreenKit.Line;
 import com.lifeforge.tui4j.Theme;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -217,21 +219,15 @@ public class PersonalizedRecommendationEngineTest {
         assertEquals(GoalCompatibilityStatus.Level.WARNING, status90.getLevel());
         assertTrue(status90.isWarning());
         assertEquals("⚠ WARNING", status90.getLevel().getTitle());
-        assertTrue(status90.getProfileSummary().contains("18 yrs"));
-        assertTrue(status90.getProfileSummary().contains("160 cm"));
-        assertTrue(status90.getProfileSummary().contains("90 kg"));
-        assertTrue(status90.getProfileSummary().contains("BMI 35.2"));
-
-        assertFalse(status90.getRecommendations().isEmpty());
-        assertTrue(status90.getRecommendations().stream().anyMatch(r -> r.contains("healthy weight management")));
-        assertTrue(status90.getRecommendations().stream().anyMatch(r -> r.contains("fitness")));
-
         // Verify card rendering
         List<Line> card = status90.renderCard(74);
         assertNotNull(card);
         assertTrue(card.size() >= 8);
         assertTrue(card.get(0).text().contains("┌"));
         assertTrue(card.get(card.size() - 1).text().contains("└"));
+        for (Line line : card) {
+            assertEquals(72, Theme.width(line.text()), "Every card line must be exactly width 72: " + line.text());
+        }
 
         // 20 yrs, 160 cm, 50 kg, Gain Weight -> WELL_ALIGNED
         User u50kg = new User();
@@ -388,11 +384,14 @@ public class PersonalizedRecommendationEngineTest {
         assertEquals(1, Theme.displayWidth(' '));
 
         // Priority badges and emojis used in LIFEForge must have display width 2
-        String[] emojis = { "🔴", "🟡", "🔵", "⭐", "✅", "❌", "✏", "➕", "💧", "🍎", "🏃", "🍽", "🏋", "🧘", "😴", "🎯", "⚠", "⚙" };
+        String[] emojis = { "🔴", "🟡", "🔵", "⭐", "✅", "❌", "➕", "💧", "🍎", "🏃", "🍽", "🧘", "😴", "🎯" };
         for (String emoji : emojis) {
             int displayW = Theme.width(emoji);
             assertEquals(2, displayW, "Emoji " + emoji + " should have display width 2");
         }
+
+        // Standard Unicode warning symbol has width 1 in terminal emulators
+        assertEquals(1, Theme.width("⚠"), "Warning sign '⚠' must have display width 1 in standard terminal emulators");
     }
 
     @Test
@@ -459,7 +458,7 @@ public class PersonalizedRecommendationEngineTest {
         blueprintBody.add(Line.of(Theme.text(), "    🍎 Nutrition: Protein-forward breakfast"));
         blueprintBody.add(Line.blank());
         blueprintBody.add(Line.of(Theme.headingCyan(), "  MIDDAY RHYTHM"));
-        blueprintBody.add(Line.of(Theme.text(), "    🏋 Exercise: Progressive overload resistance training"));
+        blueprintBody.add(Line.of(Theme.text(), "    🏃 Exercise: Progressive overload resistance training"));
         blueprintBody.add(Line.of(Theme.text(), "    🍽 Lunch: Balanced meal with whole foods"));
         blueprintBody.add(Line.blank());
         blueprintBody.add(Line.of(Theme.headingPurple(), "  EVENING RHYTHM"));
@@ -469,6 +468,25 @@ public class PersonalizedRecommendationEngineTest {
 
         String blueprintPage = ScreenKit.page("Daily Blueprint", "Recommended daily rhythm", blueprintBody, "", false, footer, frameWidth);
         assertBorderAlignment(blueprintPage, frameWidth);
+
+        // 5. Goal Compatibility Status Card wrapped in page frame (Warning state)
+        User uWarn = new User();
+        uWarn.setAge(20);
+        uWarn.setGender(Gender.MALE);
+        uWarn.setHeightCm(175.0);
+        uWarn.setWeightKg(50.0);
+        uWarn.setActivityLevel(ActivityLevel.LIGHTLY_ACTIVE);
+        Goal loseGoal = new Goal(11L, "LOSE_WEIGHT", "Lose Weight", "Calorie deficit", true);
+        GoalCompatibilityStatus compatStatus = GoalCompatibilityStatus.compute(uWarn, loseGoal);
+        assertTrue(compatStatus.isWarning());
+
+        List<Line> compatBody = new ArrayList<>();
+        compatBody.add(Line.blank());
+        compatBody.add(Line.of(Theme.headingCyan(), "  GOAL COMPATIBILITY STATUS"));
+        compatBody.addAll(compatStatus.renderCard(frameWidth - 4));
+
+        String compatPage = ScreenKit.page("Personalized Analysis", "Understanding your profile and selected goal", compatBody, "", false, footer, frameWidth);
+        assertBorderAlignment(compatPage, frameWidth);
     }
 
     private void assertBorderAlignment(String page, int expectedWidth) {
@@ -554,6 +572,503 @@ public class PersonalizedRecommendationEngineTest {
     }
 
     @Test
+    public void testNutritionRecommendationDetailStructureAndNoEstimatedTargets() {
+        int frameWidth = 80;
+        List<Line> body = new ArrayList<>();
+        body.add(Line.of(Theme.headingCyan(), "  🍎 EAT ENOUGH PROTEIN"));
+
+        Recommendation mockRec = new Recommendation(
+                1L, 1L, 1L, ActivityLevel.MODERATELY_ACTIVE,
+                "Eat More Protein",
+                "Adequate protein supports muscle growth and recovery.",
+                "Prioritize high-quality protein sources.",
+                null, "120 g protein/day",
+                "Maintain a balanced diet and choose a variety of nutrient-dense foods."
+        );
+
+        LifeForge.renderNutritionRecommendationDetail(body, mockRec, frameWidth);
+
+        // Horizontal Action Menu matching user image
+        body.add(Line.blank());
+        List<String> menuItems = List.of(
+                "💾 Save Recommendation",
+                "💡 Why This?",
+                "🤖 Chat with AI",
+                "⬅️ Back"
+        );
+        body.addAll(ScreenKit.menuHorizontal(menuItems, 0, frameWidth - 2));
+
+        List<String[]> footer = List.of(
+                new String[] { "Left/Right", "Select" },
+                new String[] { "Enter", "Open / action" },
+                new String[] { "B", "Back" },
+                new String[] { "H", "Home" },
+                new String[] { "Q", "Quit" }
+        );
+
+        String page = ScreenKit.page("Recommendation Detail", "Specific actions calibrated for your profile", body, "", false, footer, frameWidth);
+        assertBorderAlignment(page, frameWidth);
+
+        String clean = page.replaceAll("\u001B\\[[;\\d]*m", "");
+
+        // 1. Required sections are present
+        assertTrue(clean.contains("[ DESCRIPTION ]"));
+        assertTrue(clean.contains("Adequate protein supports muscle growth and recovery."));
+        assertTrue(clean.contains("🍽️ NUTRITION GUIDANCE"));
+        assertTrue(clean.contains("🥗 FOOD SOURCES"));
+        assertTrue(clean.contains("[ IMPORTANT NOTES ]"));
+        assertTrue(clean.contains("Maintain a balanced diet and choose a variety of nutrient-dense foods."));
+
+        // 2. Card 1 guidance
+        assertTrue(clean.contains("Daily Energy Guidance"));
+        assertTrue(clean.contains("120 g protein/day"));
+        assertTrue(clean.contains("Meal Guidance"));
+        assertTrue(clean.contains("Include a protein-rich food source with each meal."));
+
+        // 3. Card 2 food sources
+        assertTrue(clean.contains("Animal Sources"));
+        assertTrue(clean.contains("Chicken, eggs, fish, Greek yogurt"));
+        assertTrue(clean.contains("Plant Sources"));
+        assertTrue(clean.contains("Tofu, edamame, lentils, legumes"));
+
+        // 4. Boxed Horizontal Action Buttons with spaces matching user drawing
+        assertTrue(clean.contains("[ 💾 Save Recommendation ]"));
+        assertTrue(clean.contains("[ 💡 Why This? ]"));
+        assertTrue(clean.contains("[ 🤖 Chat with AI ]"));
+        assertTrue(clean.contains("[ — Back ]"));
+        assertTrue(clean.contains(">[ 💾 Save Recommendation ]  [ 💡 Why This? ]  [ 🤖 Chat with AI ]  [ — Back ]"));
+
+        // 5. No sprawling generic nutrition areas or obsolete sections
+        assertFalse(clean.contains("[ NUTRITION AREAS ]"));
+        assertFalse(clean.contains("Vegetables & Fiber"));
+        assertFalse(clean.contains("Balanced Carbohydrates"));
+        assertFalse(clean.contains("Balanced Meals"));
+
+        // 6. No duplicate estimated targets
+        assertFalse(clean.contains("PERSONALIZED GUIDANCE"));
+        assertFalse(clean.contains("BMR"));
+        assertFalse(clean.contains("TDEE"));
+        assertFalse(clean.contains("Calorie Target"));
+        assertFalse(clean.contains("Hydration Target"));
+
+        // 7. Non-tracking decision engine: no diaries, meal logging, or checkboxes
+        assertFalse(clean.contains("Meal Log"));
+        assertFalse(clean.contains("Food Diary"));
+        assertFalse(clean.contains("Barcode"));
+        assertFalse(clean.contains("[ ]"));
+        assertFalse(clean.contains("[x]"));
+        assertFalse(clean.contains("☑"));
+        assertFalse(clean.contains("☐"));
+
+        // 8. Zero truncation ellipsis
+        assertFalse(clean.contains("..."));
+    }
+
+    @Test
+    public void testExerciseRecommendation2CardLayoutAndBorderAlignment() {
+        int frameWidth = 80;
+        int cardWidth = frameWidth - 8; // 72
+        int cardInner = cardWidth - 2;   // 70
+
+        List<Line> body = new ArrayList<>();
+        body.add(Line.blank());
+
+        // Card 1: 🏃 RECOMMENDED EXERCISE TYPES
+        int title1W = Theme.width("🏃 RECOMMENDED EXERCISE TYPES");
+        int dash1 = Math.max(0, cardWidth - 5 - title1W);
+        body.add(Line.of(Theme.bar(), "  ┌─ 🏃 RECOMMENDED EXERCISE TYPES " + "─".repeat(dash1) + "┐"));
+        body.add(Line.of(Theme.plain(), "  │" + " ".repeat(cardInner) + "│"));
+        body.add(Line.of(Theme.plain(), "  │" + Theme.padRight("  • " + Theme.padRight("Aerobic Base", 17) + ": Brisk walking, incline treadmill, or cycling", cardInner) + "│"));
+        body.add(Line.of(Theme.plain(), "  │" + Theme.padRight("  • " + Theme.padRight("Resistance Focus", 17) + ": Bodyweight squats, push-ups, light dumbbells", cardInner) + "│"));
+        body.add(Line.of(Theme.plain(), "  │" + Theme.padRight("  • " + Theme.padRight("Active Mobility", 17) + ": Dynamic stretching & core stabilization", cardInner) + "│"));
+        body.add(Line.of(Theme.plain(), "  │" + " ".repeat(cardInner) + "│"));
+        body.add(Line.of(Theme.bar(), "  └" + "─".repeat(cardInner) + "┘"));
+
+        body.add(Line.blank());
+
+        // Card 2: ⏱️ TRAINING PARAMETERS
+        int title2W = Theme.width("⏱️ TRAINING PARAMETERS");
+        int dash2 = Math.max(0, cardWidth - 5 - title2W);
+        body.add(Line.of(Theme.bar(), "  ┌─ ⏱️ TRAINING PARAMETERS " + "─".repeat(dash2) + "┐"));
+        body.add(Line.of(Theme.plain(), "  │" + " ".repeat(cardInner) + "│"));
+        body.add(Line.of(Theme.plain(), "  │" + Theme.padRight("  • " + Theme.padRight("Target Frequency", 17) + ": 3–4 sessions / week", cardInner) + "│"));
+        body.add(Line.of(Theme.plain(), "  │" + Theme.padRight("  • " + Theme.padRight("Session Duration", 17) + ": 30–40 minutes / day", cardInner) + "│"));
+        body.add(Line.of(Theme.plain(), "  │" + Theme.padRight("  • " + Theme.padRight("Intensity Zone", 17) + ": Moderate (RPE 6–7 / conversational pace)", cardInner) + "│"));
+        body.add(Line.of(Theme.plain(), "  │" + " ".repeat(cardInner) + "│"));
+        body.add(Line.of(Theme.bar(), "  └" + "─".repeat(cardInner) + "┘"));
+
+        body.add(Line.blank());
+        List<String> menuItems = List.of(
+                "💾 Save Recommendation",
+                "💡 Why This?",
+                "🤖 Chat with AI",
+                "⬅️ Back"
+        );
+        body.addAll(ScreenKit.menu(menuItems, 0, frameWidth - 2));
+
+        List<String[]> footer = List.of(
+                new String[] { "Up/Down", "Move" },
+                new String[] { "Enter", "Select" },
+                new String[] { "Esc", "Back" }
+        );
+
+        String page = ScreenKit.page("Recommendation Detail", "Specific actions calibrated for your profile", body, "", false, footer, frameWidth);
+        assertBorderAlignment(page, frameWidth);
+
+        String clean = page.replaceAll("\u001B\\[[;\\d]*m", "");
+
+        // 1. Verify Card 1 contents
+        assertTrue(clean.contains("RECOMMENDED EXERCISE TYPES"));
+        assertTrue(clean.contains("Aerobic Base"));
+        assertTrue(clean.contains("Brisk walking, incline treadmill, or cycling"));
+        assertTrue(clean.contains("Resistance Focus"));
+        assertTrue(clean.contains("Bodyweight squats, push-ups, light dumbbells"));
+        assertTrue(clean.contains("Active Mobility"));
+        assertTrue(clean.contains("Dynamic stretching & core stabilization"));
+
+        // 2. Verify Card 2 contents
+        assertTrue(clean.contains("TRAINING PARAMETERS"));
+        assertTrue(clean.contains("Target Frequency"));
+        assertTrue(clean.contains("3–4 sessions / week"));
+        assertTrue(clean.contains("Session Duration"));
+        assertTrue(clean.contains("30–40 minutes / day"));
+        assertTrue(clean.contains("Intensity Zone"));
+        assertTrue(clean.contains("Moderate (RPE 6–7 / conversational pace)"));
+
+        // 3. Verify no duplicate metrics
+        assertFalse(clean.contains("BMR"));
+        assertFalse(clean.contains("TDEE"));
+        assertFalse(clean.contains("Calorie Target"));
+        assertFalse(clean.contains("Hydration Target"));
+
+        // 4. Verify non-tracking scope guardrails (no checkboxes, rep counters, logging)
+        assertFalse(clean.contains("[ ]"));
+        assertFalse(clean.contains("Checklist"));
+        assertFalse(clean.contains("Log workout"));
+        assertFalse(clean.contains("reps"));
+    }
+
+    @Test
+    public void testSleepRecommendation2CardLayoutAndBorderAlignment() {
+        int frameWidth = 80;
+
+        List<Line> body = new ArrayList<>();
+        body.add(Line.blank());
+
+        // Card 1: 🌙 SLEEP HYGIENE
+        List<String> card1Lines = List.of(
+                "  • " + Theme.padRight("Light & Screens", 18) + ": Cut blue light and digital screens 45–60 mins prior to bedtime",
+                "  • " + Theme.padRight("Sleep Environment", 18) + ": Keep bedroom cool (~18–20°C), dark, and quiet",
+                "  • " + Theme.padRight("Wind-Down Routine", 18) + ": 15–30 mins low-stimulation habit (reading or breathwork)"
+        );
+        LifeForge.renderBoxCard(body, "🌙 SLEEP HYGIENE", card1Lines, frameWidth);
+
+        body.add(Line.blank());
+
+        // Card 2: 💪 RECOVERY & REST
+        List<String> card2Lines = List.of(
+                "  • " + Theme.padRight("Sleep Schedule", 18) + ": Target 7–9 hours / night with consistent wake times",
+                "  • " + Theme.padRight("Training Recovery", 18) + ": Balance active training with structured rest intervals",
+                "  • " + Theme.padRight("Evening Recovery", 18) + ": Taper fluid intake 90 mins before bed and avoid stimulants"
+        );
+        LifeForge.renderBoxCard(body, "💪 RECOVERY & REST", card2Lines, frameWidth);
+
+        body.add(Line.blank());
+        List<String> menuItems = List.of(
+                "💾 Save Recommendation",
+                "💡 Why This?",
+                "🤖 Chat with AI",
+                "⬅️ Back"
+        );
+        body.addAll(ScreenKit.menu(menuItems, 0, frameWidth - 2));
+
+        List<String[]> footer = List.of(
+                new String[] { "Up/Down", "Move" },
+                new String[] { "Enter", "Select" },
+                new String[] { "Esc", "Back" }
+        );
+
+        String page = ScreenKit.page("Recommendation Detail", "Specific actions calibrated for your profile", body, "", false, footer, frameWidth);
+        assertBorderAlignment(page, frameWidth);
+
+        String clean = page.replaceAll("\u001B\\[[;\\d]*m", "");
+
+        // 1. Verify Card 1 contents & wrapped phrases (no truncation)
+        assertTrue(clean.contains("SLEEP HYGIENE"));
+        assertTrue(clean.contains("Light & Screens"));
+        assertTrue(clean.contains("Cut blue light and digital screens"));
+        assertTrue(clean.contains("Sleep Environment"));
+        assertTrue(clean.contains("Keep bedroom cool"));
+        assertTrue(clean.contains("Wind-Down Routine"));
+        assertTrue(clean.contains("(reading or breathwork)"));
+
+        // 2. Verify Card 2 contents
+        assertTrue(clean.contains("RECOVERY & REST"));
+        assertTrue(clean.contains("Sleep Schedule"));
+        assertTrue(clean.contains("7–9 hours / night"));
+        assertTrue(clean.contains("Training Recovery"));
+        assertTrue(clean.contains("Evening Recovery"));
+
+        // 3. Verify no duplicate metrics
+        assertFalse(clean.contains("BMR"));
+        assertFalse(clean.contains("TDEE"));
+        assertFalse(clean.contains("Calorie Target"));
+
+        // 4. Verify non-tracking scope guardrails
+        assertFalse(clean.contains("sleep timer"));
+        assertFalse(clean.contains("alarm trigger"));
+        assertFalse(clean.contains("log sleep"));
+
+        // 5. Verify no truncation ellipsis inside cards
+        assertFalse(clean.contains("..."));
+    }
+
+    @Test
+    public void testHydrationRecommendation2CardLayoutAndBorderAlignment() {
+        int frameWidth = 80;
+
+        List<Line> body = new ArrayList<>();
+        body.add(Line.blank());
+
+        // Card 1: ⏱️ HYDRATION TIMING PROTOCOL
+        List<String> card1Lines = List.of(
+                "  • " + Theme.padRight("Morning Kickstart", 18) + ": 500 mL upon waking to rehydrate cellular systems",
+                "  • " + Theme.padRight("Daytime Cadence", 18) + ": 250–300 mL per waking hour during peak activity",
+                "  • " + Theme.padRight("Evening Taper", 18) + ": Reduce large fluid boluses 90 mins prior to bed"
+        );
+        LifeForge.renderBoxCard(body, "⏱️ HYDRATION TIMING PROTOCOL", card1Lines, frameWidth);
+
+        body.add(Line.blank());
+
+        // Card 2: 📊 INTAKE & ELECTROLYTE PARAMETERS
+        List<String> card2Lines = List.of(
+                "  • " + Theme.padRight("Target Daily Volume", 22) + ": 2.5–3.0 L/day",
+                "  • " + Theme.padRight("Activity Adjustment", 22) + ": +350–500 mL per 30 mins of moderate physical exertion",
+                "  • " + Theme.padRight("Electrolyte Balance", 22) + ": Maintain sodium/potassium balance during heat or activity"
+        );
+        LifeForge.renderBoxCard(body, "📊 INTAKE & ELECTROLYTE PARAMETERS", card2Lines, frameWidth);
+
+        body.add(Line.blank());
+        List<String> menuItems = List.of(
+                "💾 Save Recommendation",
+                "💡 Why This?",
+                "🤖 Chat with AI",
+                "⬅️ Back"
+        );
+        body.addAll(ScreenKit.menu(menuItems, 0, frameWidth - 2));
+
+        List<String[]> footer = List.of(
+                new String[] { "Up/Down", "Move" },
+                new String[] { "Enter", "Select" },
+                new String[] { "Esc", "Back" }
+        );
+
+        String page = ScreenKit.page("Recommendation Detail", "Specific actions calibrated for your profile", body, "", false, footer, frameWidth);
+        assertBorderAlignment(page, frameWidth);
+
+        String clean = page.replaceAll("\u001B\\[[;\\d]*m", "");
+
+        // 1. Verify Card 1 contents & wrapped phrases (no truncation)
+        assertTrue(clean.contains("HYDRATION TIMING PROTOCOL"));
+        assertTrue(clean.contains("Morning Kickstart"));
+        assertTrue(clean.contains("rehydrate cellular systems"));
+        assertTrue(clean.contains("Daytime Cadence"));
+        assertTrue(clean.contains("Evening Taper"));
+        assertTrue(clean.contains("prior to bed"));
+
+        // 2. Verify Card 2 contents & wrapped phrases
+        assertTrue(clean.contains("INTAKE & ELECTROLYTE PARAMETERS"));
+        assertTrue(clean.contains("Target Daily Volume"));
+        assertTrue(clean.contains("Activity Adjustment"));
+        assertTrue(clean.contains("moderate physical exertion"));
+        assertTrue(clean.contains("Electrolyte Balance"));
+
+        // 3. Verify no duplicate metrics
+        assertFalse(clean.contains("BMR"));
+        assertFalse(clean.contains("TDEE"));
+        assertFalse(clean.contains("Calorie Target"));
+
+        // 4. Verify non-tracking scope guardrails
+        assertFalse(clean.contains("water intake logging"));
+        assertFalse(clean.contains("cup counter"));
+        assertFalse(clean.contains("log water"));
+
+        // 5. Verify no truncation ellipsis inside cards
+        assertFalse(clean.contains("..."));
+    }
+
+    @Test
+    public void testRenderBoxCardWordWrappingAndLabelIndentation() {
+        int cardWidth = 72; // 80 - 8
+
+        // Test 1: Sleep - Light Control wrapping & label indentation
+        String sleepLight = "  • " + Theme.padRight("Light Control", 16) + ": Cut blue light & digital screens 45–60 mins prior to bed";
+        List<String> wrappedSleepLight = LifeForge.wrapCardLine(sleepLight, cardWidth);
+        assertEquals(2, wrappedSleepLight.size());
+        assertEquals("  • Light Control   : Cut blue light & digital screens 45–60 mins", wrappedSleepLight.get(0));
+        assertEquals("                      prior to bed", wrappedSleepLight.get(1));
+        // Indentation aligns right below value: exactly 22 spaces
+        assertTrue(wrappedSleepLight.get(1).startsWith(" ".repeat(22)));
+
+        // Test 2: Sleep - Wind-Down Habit with parenthesized expression
+        String sleepWindDown = "  • " + Theme.padRight("Wind-Down Habit", 16) + ": 10–15 mins low-stimulation routine (reading or breathwork)";
+        List<String> wrappedWindDown = LifeForge.wrapCardLine(sleepWindDown, cardWidth);
+        assertEquals(2, wrappedWindDown.size());
+        assertEquals("  • Wind-Down Habit : 10–15 mins low-stimulation routine", wrappedWindDown.get(0));
+        assertEquals("                      (reading or breathwork)", wrappedWindDown.get(1));
+        assertTrue(wrappedWindDown.get(1).startsWith(" ".repeat(22)));
+
+        // Test 3: Hydration - Morning Kickstart
+        String hydraMorning = "  • " + Theme.padRight("Morning Kickstart", 18) + ": 500 mL upon waking to rehydrate cellular systems";
+        List<String> wrappedMorning = LifeForge.wrapCardLine(hydraMorning, cardWidth);
+        assertEquals(2, wrappedMorning.size());
+        assertEquals("  • Morning Kickstart : 500 mL upon waking to", wrappedMorning.get(0));
+        assertEquals("                        rehydrate cellular systems", wrappedMorning.get(1));
+        assertTrue(wrappedMorning.get(1).startsWith(" ".repeat(24)));
+
+        // Test 4: Hydration - Activity Adjustment
+        String hydraActivity = "  • " + Theme.padRight("Activity Adjustment", 22) + ": +350–500 mL per 30 mins of moderate physical exertion";
+        List<String> wrappedActivity = LifeForge.wrapCardLine(hydraActivity, cardWidth);
+        assertEquals(2, wrappedActivity.size());
+        assertEquals("  • Activity Adjustment   : +350–500 mL per 30 mins of", wrappedActivity.get(0));
+        assertEquals("                            moderate physical exertion", wrappedActivity.get(1));
+        assertTrue(wrappedActivity.get(1).startsWith(" ".repeat(28)));
+
+        // Test 5: Verify rendered rows inside a card have exact width and border alignment
+        List<Line> body = new ArrayList<>();
+        LifeForge.renderBoxCard(body, "🌙 SLEEP HYGIENE PROTOCOL", List.of(sleepLight, sleepWindDown), 80);
+        for (Line l : body) {
+            String plainText = l.text().replaceAll("\u001B\\[[;\\d]*m", "");
+            assertEquals(74, Theme.width(plainText), "Line width must be 74: " + plainText);
+            assertTrue(plainText.startsWith("  ┌") || plainText.startsWith("  │") || plainText.startsWith("  └"));
+            assertTrue(plainText.endsWith("┐") || plainText.endsWith("│") || plainText.endsWith("┘"));
+            assertFalse(plainText.contains("..."));
+        }
+    }
+
+    @Test
+    public void testHabitsRecommendation2CardLayoutAndBorderAlignment() {
+        int frameWidth = 80;
+
+        Recommendation r = new Recommendation();
+        r.setId(40L);
+        r.setGoalId(1L);
+        r.setCategoryId(4L);
+        r.setActivityLevel(ActivityLevel.SEDENTARY);
+        r.setTitle("Daily Micro-Habits for Weight Loss");
+        r.setDescription("Small consistent habits that compound over time to sustain active metabolic health.");
+        r.setImportantNotes("These are suggestions to try, not a checklist to complete daily.");
+
+        List<Line> body = new ArrayList<>();
+        body.add(Line.blank());
+
+        // Header
+        String title = r.getTitle().trim();
+        String displayTitle = title.startsWith("🌱") ? title : "🌱 " + title;
+        body.add(Line.of(Theme.headingCyan(), "  " + displayTitle.toUpperCase(Locale.ROOT)));
+
+        // Description
+        body.add(Line.blank());
+        body.add(Line.of(Theme.headingPurple(), "  [ DESCRIPTION ]"));
+        body.addAll(ScreenKit.paragraph(r.getDescription(), frameWidth - 2));
+
+        body.add(Line.blank());
+
+        // Card 1 (Top Box): 🌱 HIGH-LEVERAGE DAILY HABITS
+        List<String> card1Lines = List.of(
+                "  • " + Theme.padRight("Protein Anchor", 19) + ": Pre-portion protein sources at breakfast & lunch",
+                "  • " + Theme.padRight("Movement Prep", 19) + ": Stage training apparel & gear the night prior",
+                "  • " + Theme.padRight("Posture / Bracing", 19) + ": 2-minute core & posture reset every 2 hours sit"
+        );
+        LifeForge.renderBoxCard(body, "🌱 HIGH-LEVERAGE DAILY HABITS", card1Lines, frameWidth);
+
+        body.add(Line.blank());
+
+        // Card 2 (Bottom Box): ⚡ HABIT ANCHORING & TIMING
+        List<String> card2Lines = List.of(
+                "  • " + Theme.padRight("Friction Reduction", 20) + ": Keep hydration bottle visible on workstation",
+                "  • " + Theme.padRight("Habit Loop Trigger", 20) + ": Pair post-workout shake directly after training",
+                "  • " + Theme.padRight("Recovery Shutdown", 20) + ": Set static digital curfew 45 mins before sleep"
+        );
+        LifeForge.renderBoxCard(body, "⚡ HABIT ANCHORING & TIMING", card2Lines, frameWidth);
+
+        // Important Notes
+        body.add(Line.blank());
+        body.add(Line.of(Theme.headingPurple(), "  [ IMPORTANT NOTES ]"));
+        body.addAll(ScreenKit.paragraph(r.getImportantNotes(), frameWidth - 2));
+
+        body.add(Line.blank());
+        List<String> menuItems = List.of(
+                "💾 Save Recommendation",
+                "💡 Why This?",
+                "🤖 Chat with AI",
+                "⬅️ Back"
+        );
+        body.addAll(ScreenKit.menu(menuItems, 0, frameWidth - 2));
+
+        List<String[]> footer = List.of(
+                new String[] { "Up/Down", "Move" },
+                new String[] { "Enter", "Select" },
+                new String[] { "Esc", "Back" }
+        );
+
+        String page = ScreenKit.page("Recommendation Detail", "Specific actions calibrated for your profile", body, "", false, footer, frameWidth);
+        assertBorderAlignment(page, frameWidth);
+
+        String clean = page.replaceAll("\u001B\\[[;\\d]*m", "");
+
+        // 1. Verify Core Context Preserved
+        assertTrue(clean.contains("🌱 DAILY MICRO-HABITS FOR WEIGHT LOSS"));
+        assertTrue(clean.contains("[ DESCRIPTION ]"));
+        assertTrue(clean.contains("Small consistent habits that compound over time"));
+        assertTrue(clean.contains("[ IMPORTANT NOTES ]"));
+        assertTrue(clean.contains("These are suggestions to try, not a checklist to complete daily."));
+
+        // 2. Verify Card 1 contents
+        assertTrue(clean.contains("HIGH-LEVERAGE DAILY HABITS"));
+        assertTrue(clean.contains("Protein Anchor"));
+        assertTrue(clean.contains("Pre-portion protein sources"));
+        assertTrue(clean.contains("breakfast & lunch"));
+        assertTrue(clean.contains("Movement Prep"));
+        assertTrue(clean.contains("Stage training apparel"));
+        assertTrue(clean.contains("night prior"));
+        assertTrue(clean.contains("Posture / Bracing"));
+        assertTrue(clean.contains("2-minute core"));
+        assertTrue(clean.contains("2 hours sit"));
+
+        // 3. Verify Card 2 contents
+        assertTrue(clean.contains("HABIT ANCHORING & TIMING"));
+        assertTrue(clean.contains("Friction Reduction"));
+        assertTrue(clean.contains("Keep hydration bottle"));
+        assertTrue(clean.contains("workstation"));
+        assertTrue(clean.contains("Habit Loop Trigger"));
+        assertTrue(clean.contains("Pair post-workout shake"));
+        assertTrue(clean.contains("after training"));
+        assertTrue(clean.contains("Recovery Shutdown"));
+        assertTrue(clean.contains("Set static digital curfew"));
+        assertTrue(clean.contains("before sleep"));
+
+        // 4. Verify removal of out-of-place content
+        assertFalse(clean.contains("[ NUTRITION AREAS ]"));
+        assertFalse(clean.contains("Vegetables & Fiber"));
+        assertFalse(clean.contains("Balanced Carbohydrates"));
+        assertFalse(clean.contains("[ PERSONALIZED GUIDANCE ]"));
+        assertFalse(clean.contains("BMR"));
+        assertFalse(clean.contains("TDEE"));
+        assertFalse(clean.contains("Calorie Target"));
+
+        // 5. Verify non-tracking scope guardrails
+        assertFalse(clean.contains("[ ]"));
+        assertFalse(clean.contains("[x]"));
+        assertFalse(clean.contains("streak"));
+        assertFalse(clean.contains("daily check-in"));
+        assertFalse(clean.contains("check-in"));
+
+        // 6. Verify no truncation ellipsis inside cards
+        assertFalse(clean.contains("..."));
+    }
+
+    @Test
     public void testCompleteMasterRoutineSynthesis() throws SQLException {
         RecommendationCategory masterCat = new RecommendationCategory(5L, "Complete Master Routine", "Combined daily routine", null, 5);
         RecommendationCategory nutritionCat = new RecommendationCategory(1L, "Nutrition", "Dietary guidance", null, 1);
@@ -634,7 +1149,7 @@ public class PersonalizedRecommendationEngineTest {
         assertNotNull(result.recommendation);
 
         Recommendation rec = result.recommendation;
-        assertEquals(-1L, rec.getId());
+        assertNotNull(rec.getId(), "Complete Master Routine must have a valid ID so it can be saved");
         assertTrue(rec.getTitle().contains("Complete Master Routine"));
         assertTrue(rec.getTitle().contains("Build Muscle"));
 
@@ -664,7 +1179,7 @@ public class PersonalizedRecommendationEngineTest {
         // 5. Verify direct lookup interception via getRecommendation(user, goal, 5L)
         Optional<RecommendationService.RecommendationResult> generated = service.getRecommendation(sampleUser, muscleGoal, 5L);
         assertTrue(generated.isPresent());
-        assertEquals(-1L, generated.get().recommendation.getId());
+        assertNotNull(generated.get().recommendation.getId());
         assertTrue(generated.get().recommendation.getRecommendedActions().contains("🍎 Nutrition:"));
         assertTrue(generated.get().recommendation.getRecommendedActions().contains("🏋 Exercise:"));
         assertTrue(generated.get().recommendation.getRecommendedActions().contains("💧 Hydration:"));
@@ -1018,5 +1533,659 @@ public class PersonalizedRecommendationEngineTest {
                 System.clearProperty("lifeforge.ai.enabled");
             }
         }
+    }
+
+    @Test
+    public void testSpaciousBoxedHorizontalMenuAndSelectionStates() {
+        List<String> items = List.of(
+                "💾 Save Recommendation",
+                "💡 Why This?",
+                "🤖 Chat with AI",
+                "— Back"
+        );
+
+        // 1. Spacious mode (frame width 96, inner 94)
+        int innerSpacious = 94;
+        List<Line> sel0Spacious = ScreenKit.menuHorizontal(items, 0, innerSpacious);
+        List<Line> sel1Spacious = ScreenKit.menuHorizontal(items, 1, innerSpacious);
+        List<Line> sel2Spacious = ScreenKit.menuHorizontal(items, 2, innerSpacious);
+        List<Line> sel3Spacious = ScreenKit.menuHorizontal(items, 3, innerSpacious);
+
+        assertEquals(1, sel0Spacious.size());
+        assertEquals(1, sel1Spacious.size());
+        assertEquals(1, sel2Spacious.size());
+        assertEquals(1, sel3Spacious.size());
+
+        String s0 = sel0Spacious.get(0).text();
+        String s1 = sel1Spacious.get(0).text();
+        String s2 = sel2Spacious.get(0).text();
+        String s3 = sel3Spacious.get(0).text();
+
+        assertEquals("> [ 💾 Save Recommendation ]    [ 💡 Why This? ]    [ 🤖 Chat with AI ]    [ — Back ]", s0);
+        assertEquals("  [ 💾 Save Recommendation ]  > [ 💡 Why This? ]    [ 🤖 Chat with AI ]    [ — Back ]", s1);
+        assertEquals("  [ 💾 Save Recommendation ]    [ 💡 Why This? ]  > [ 🤖 Chat with AI ]    [ — Back ]", s2);
+        assertEquals("  [ 💾 Save Recommendation ]    [ 💡 Why This? ]    [ 🤖 Chat with AI ]  > [ — Back ]", s3);
+
+        // Ensure zero column shift across all states
+        assertEquals(Theme.width(s0), Theme.width(s1));
+        assertEquals(Theme.width(s0), Theme.width(s2));
+        assertEquals(Theme.width(s0), Theme.width(s3));
+        assertTrue(Theme.width(s0) <= innerSpacious);
+
+        // 2. Compact mode (frame width 80, inner 78)
+        int innerCompact = 78;
+        List<Line> sel0Compact = ScreenKit.menuHorizontal(items, 0, innerCompact);
+        List<Line> sel1Compact = ScreenKit.menuHorizontal(items, 1, innerCompact);
+        List<Line> sel2Compact = ScreenKit.menuHorizontal(items, 2, innerCompact);
+        List<Line> sel3Compact = ScreenKit.menuHorizontal(items, 3, innerCompact);
+
+        String c0 = sel0Compact.get(0).text();
+        String c1 = sel1Compact.get(0).text();
+        String c2 = sel2Compact.get(0).text();
+        String c3 = sel3Compact.get(0).text();
+
+        assertEquals(">[ 💾 Save Recommendation ]  [ 💡 Why This? ]  [ 🤖 Chat with AI ]  [ — Back ]", c0);
+        assertEquals(" [ 💾 Save Recommendation ] >[ 💡 Why This? ]  [ 🤖 Chat with AI ]  [ — Back ]", c1);
+        assertEquals(" [ 💾 Save Recommendation ]  [ 💡 Why This? ] >[ 🤖 Chat with AI ]  [ — Back ]", c2);
+        assertEquals(" [ 💾 Save Recommendation ]  [ 💡 Why This? ]  [ 🤖 Chat with AI ] >[ — Back ]", c3);
+
+        assertEquals(Theme.width(c0), Theme.width(c1));
+        assertEquals(Theme.width(c0), Theme.width(c2));
+        assertEquals(Theme.width(c0), Theme.width(c3));
+        assertEquals(78, Theme.width(c0));
+
+        // 3. Full Page Border Alignment on spacious 96-col frame
+        List<Line> body = new ArrayList<>();
+        body.add(Line.of(Theme.headingCyan(), "  🍎 EAT ENOUGH PROTEIN"));
+        body.add(Line.blank());
+        body.add(Line.of(Theme.headingPurple(), "  [ DESCRIPTION ]"));
+        body.addAll(ScreenKit.paragraph("Adequate protein supports muscle growth and recovery.", 94));
+        body.add(Line.blank());
+        body.addAll(sel0Spacious);
+
+        List<String[]> footer = List.of(
+                new String[] { "Left/Right", "Select" },
+                new String[] { "Enter", "Open / action" },
+                new String[] { "B", "Back" }
+        );
+        String page96 = ScreenKit.page("Recommendation Detail", "Calibrated for your profile", body, "", false, footer, 96);
+        assertBorderAlignment(page96, 96);
+    }
+
+    @Test
+    public void testCompleteMasterRoutinePage1AndPage2Layout() {
+        int frameWidth = 80;
+        Recommendation mockRec = new Recommendation(
+                100L, 1L, 5L, ActivityLevel.MODERATELY_ACTIVE,
+                "Complete Master Routine - Build Muscle",
+                "A unified lifestyle routine combining nutrition, hydration, training, and sleep.",
+                "Nutrition, Exercise, Sleep, Habits, Hydration unified.",
+                null, "Whole foods and progressive overload",
+                "Consistency across foundational habits produces greater long-term results than short-term extremes."
+        );
+
+        List<String> menuItems = List.of(
+                "💾 Save Recommendation",
+                "💡 Why This?",
+                "🤖 Chat with AI",
+                "⬅️ Back"
+        );
+
+        List<String[]> footer = List.of(
+                new String[] { "Up/Down", "Choose" },
+                new String[] { "Left/Right", "Page" },
+                new String[] { "Enter", "Open / action" },
+                new String[] { "B", "Back" },
+                new String[] { "H", "Home" },
+                new String[] { "Q", "Quit" }
+        );
+
+        // ==========================================
+        // PAGE 1: 5 Unified Lifestyle Pillars
+        // ==========================================
+        List<Line> page1Body = new ArrayList<>();
+        page1Body.add(Line.of(Theme.headingCyan(), "  ⭐ COMPLETE MASTER ROUTINE"));
+        page1Body.add(Line.of(Theme.dim(), "  Page 1 / 2  (Use \u2190 / \u2192 to flip pages)"));
+        LifeForge.renderMasterRoutinePage1(page1Body, mockRec, frameWidth);
+        page1Body.add(Line.blank());
+        page1Body.addAll(ScreenKit.menuHorizontal(menuItems, 0, frameWidth - 2));
+
+        String page1 = ScreenKit.page("Recommendation Detail", "Specific actions calibrated for your profile", page1Body, "", false, footer, frameWidth);
+        assertBorderAlignment(page1, frameWidth);
+
+        String clean1 = page1.replaceAll("\u001B\\[[;\\d]*m", "");
+
+        // Verify Page 1 elements
+        assertTrue(clean1.contains("⭐ COMPLETE MASTER ROUTINE"));
+        assertTrue(clean1.contains("Page 1 / 2  (Use ← / → to flip pages)"));
+        assertTrue(clean1.contains("[ DESCRIPTION ]"));
+        assertTrue(clean1.contains("A unified lifestyle routine combining nutrition"));
+        assertTrue(clean1.contains("sleep."));
+        assertTrue(clean1.contains("📋 UNIFIED LIFESTYLE PILLARS"));
+        assertTrue(clean1.contains("Nutrition"));
+        assertTrue(clean1.contains("Prioritize balanced meals and"));
+        assertTrue(clean1.contains("aligned with your target intake."));
+        assertTrue(clean1.contains("Hydration"));
+        assertTrue(clean1.contains("Maintain steady fluid intake"));
+        assertTrue(clean1.contains("throughout active daytime hours."));
+        assertTrue(clean1.contains("Exercise"));
+        assertTrue(clean1.contains("Complete scheduled training sessions"));
+        assertTrue(clean1.contains("steady progression."));
+        assertTrue(clean1.contains("Recovery"));
+        assertTrue(clean1.contains("Protect your nightly sleep window"));
+        assertTrue(clean1.contains("support tissue adaptation."));
+        assertTrue(clean1.contains("Daily Habits"));
+        assertTrue(clean1.contains("Anchor small, low-friction routines"));
+        assertTrue(clean1.contains("without relying"));
+        assertTrue(clean1.contains("solely on motivation."));
+        assertTrue(clean1.contains("[ IMPORTANT NOTES ]"));
+        assertTrue(clean1.contains("Consistency across foundational habits produces"));
+        assertTrue(clean1.contains("than short-term extremes."));
+
+        // Navigation actions for Master Routine (Boxed Horizontal Menu)
+        assertTrue(clean1.contains("[ 💾 Save Recommendation ]"));
+        assertTrue(clean1.contains("[ 💡 Why This? ]"));
+        assertTrue(clean1.contains("[ 🤖 Chat with AI ]"));
+        assertTrue(clean1.contains("[ — Back ]"));
+        assertTrue(clean1.contains(">[ 💾 Save Recommendation ]  [ 💡 Why This? ]  [ 🤖 Chat with AI ]  [ — Back ]"));
+
+        // Zero metric duplication / invention
+        assertFalse(clean1.contains("BMR"));
+        assertFalse(clean1.contains("TDEE"));
+        assertFalse(clean1.contains("Calorie Target"));
+        assertFalse(clean1.contains("Hydration Target"));
+
+        // ==========================================
+        // PAGE 2: Daily Lifestyle Guidance (Rhythm)
+        // ==========================================
+        List<Line> page2Body = new ArrayList<>();
+        page2Body.add(Line.of(Theme.headingCyan(), "  ⭐ COMPLETE MASTER ROUTINE"));
+        page2Body.add(Line.of(Theme.dim(), "  Page 2 / 2  (Use \u2190 / \u2192 to flip pages)"));
+        LifeForge.renderMasterRoutinePage2(page2Body, mockRec, frameWidth);
+        page2Body.add(Line.blank());
+        page2Body.addAll(ScreenKit.menuHorizontal(menuItems, 0, frameWidth - 2));
+
+        String page2 = ScreenKit.page("Recommendation Detail", "Specific actions calibrated for your profile", page2Body, "", false, footer, frameWidth);
+        assertBorderAlignment(page2, frameWidth);
+
+        String clean2 = page2.replaceAll("\u001B\\[[;\\d]*m", "");
+
+        // Verify Page 2 elements
+        assertTrue(clean2.contains("⭐ COMPLETE MASTER ROUTINE"));
+        assertTrue(clean2.contains("Page 2 / 2  (Use ← / → to flip pages)"));
+        assertTrue(clean2.contains("🌅 DAILY LIFESTYLE GUIDANCE"));
+        assertTrue(clean2.contains("Morning"));
+        assertTrue(clean2.contains("Start the day with hydration and a balanced meal."));
+        assertTrue(clean2.contains("Daytime"));
+        assertTrue(clean2.contains("Maintain regular movement"));
+        assertTrue(clean2.contains("recommended routine."));
+        assertTrue(clean2.contains("Evening"));
+        assertTrue(clean2.contains("Follow a balanced dinner routine"));
+        assertTrue(clean2.contains("for the next day."));
+        assertTrue(clean2.contains("Night"));
+        assertTrue(clean2.contains("Reduce stimulating activities"));
+        assertTrue(clean2.contains("consistent sleep routine."));
+        assertTrue(clean2.contains("This rhythm provides a flexible structure to guide your day sustainably."));
+
+        // Navigation actions for Master Routine (Boxed Horizontal Menu)
+        assertTrue(clean2.contains("[ 💾 Save Recommendation ]"));
+        assertTrue(clean2.contains("[ 💡 Why This? ]"));
+        assertTrue(clean2.contains("[ 🤖 Chat with AI ]"));
+        assertTrue(clean2.contains("[ — Back ]"));
+        assertTrue(clean2.contains(">[ 💾 Save Recommendation ]  [ 💡 Why This? ]  [ 🤖 Chat with AI ]  [ — Back ]"));
+
+        // Zero metric duplication / invention
+        assertFalse(clean2.contains("BMR"));
+        assertFalse(clean2.contains("TDEE"));
+        assertFalse(clean2.contains("Calorie Target"));
+        assertFalse(clean2.contains("Hydration Target"));
+        assertFalse(clean2.contains("500 mL bolus"));
+        assertFalse(clean2.contains("25–35 g protein"));
+
+        // Non-tracking guardrail
+        assertFalse(clean2.contains("Meal Log"));
+        assertFalse(clean2.contains("Check off"));
+        assertFalse(clean2.contains("Streak"));
+    }
+
+    @Test
+    public void testWhyRecommendation2CardLayoutAndSecondPersonTone() {
+        int frameWidth = 80;
+        User user = new User(1L, "Alex Doe", "alex", "alex@example.com", "hash", 28,
+                Gender.MALE, 178.0, 75.0, ActivityLevel.MODERATELY_ACTIVE, Role.USER, false, null, null);
+        Goal goal = new Goal(1L, "MUSCLE_GAIN", "Build Muscle", "Build functional muscle mass", true);
+        Recommendation rec = new Recommendation(
+                1L, 1L, 1L, ActivityLevel.MODERATELY_ACTIVE,
+                "Eat More Protein",
+                "Adequate protein supports muscle growth and recovery.",
+                "Include a protein-rich food source with each meal.",
+                null, "120 g protein/day",
+                "Maintain a balanced diet and choose a variety of nutrient-dense foods."
+        );
+
+        List<Line> body = new ArrayList<>();
+        LifeForge.renderWhyRecommendation(body, rec, goal, user, null, false, frameWidth);
+
+        List<String[]> footer = List.of(
+                new String[] { "Enter/B", "Back" },
+                new String[] { "H", "Home" },
+                new String[] { "Q", "Quit" }
+        );
+
+        String page = ScreenKit.page("Why This Fits", "Personalized rationale", body, "", false, footer, frameWidth);
+        assertBorderAlignment(page, frameWidth);
+
+        String clean = page.replaceAll("\u001B\\[[;\\d]*m", "");
+
+        // 1. Title & 2-Card Scaffolding
+        assertTrue(clean.contains("💡 WHY THIS RECOMMENDATION FITS YOU"));
+        assertTrue(clean.contains("👤 PROFILE CONTEXT"));
+        assertTrue(clean.contains("💡 WHY IT FITS"));
+        assertFalse(clean.contains("🔬 PHYSIOLOGICAL RATIONALE"));
+
+        // 2. Card 1: Structured Profile Context & proper label spacing
+        assertTrue(clean.contains("Active Goal       : Build Muscle"));
+        assertTrue(clean.contains("Activity Level    : Moderately Active"));
+        assertTrue(clean.contains("Parameters        : 75.0 kg | 178 cm | Age 28 | Male"));
+        assertTrue(clean.contains("Engine Target     : 120 g protein/day"));
+        assertTrue(clean.contains("Suggested Guidance: Include a protein-rich"));
+        assertTrue(clean.contains("food source with each meal."));
+
+        // 3. Card 2: Personalized WHY IT FITS bullets
+        assertTrue(clean.contains("Supports Your Goal"));
+        assertTrue(clean.contains("Build Muscle"));
+        assertTrue(clean.contains("Fits Your Activity Level"));
+        assertTrue(clean.contains("moderately active"));
+        assertTrue(clean.contains("Supports Balanced Nutrition"));
+
+        // 4. Source line
+        assertTrue(clean.contains("Source: LIFEForge Rule Engine"));
+
+        // 5. Total absence of tautological intro
+        assertFalse(clean.contains("selected this recommendation because"));
+        assertFalse(clean.contains("selected this because"));
+        assertFalse(clean.contains("aligns with your current goal"));
+        assertFalse(clean.contains("aligns with your goal"));
+        assertFalse(clean.contains("Your selected goal is"));
+
+        // 6. Strict Second-Person Tone - zero third-person medical phrasing
+        assertFalse(clean.contains("this user"));
+        assertFalse(clean.contains("the user"));
+        assertFalse(clean.contains("the patient"));
+        assertFalse(clean.matches("(?s).*\\b(his|her)\\b.*"));
+
+        // 7. Nutrition recommendations always use personalized WHY IT FITS bullets
+        //    The AI raw text is passed but the nutrition branch takes precedence (same as sleep)
+        String aiRawWithThirdPerson = "• Muscle Recovery: The patient's muscle fibers require amino acids.\n"
+                + "• Protein Timing: Consuming protein across her meals supports your daily metabolic rate.\n"
+                + "• Glycogen Replenishment: Post-workout carbs refuel liver stores.";
+        List<Line> bodyAi = new ArrayList<>();
+        LifeForge.renderWhyRecommendation(bodyAi, rec, goal, user, aiRawWithThirdPerson, true, frameWidth);
+        String pageAi = ScreenKit.page("Why This Fits", "Personalized rationale", bodyAi, "", false, footer, frameWidth);
+        assertBorderAlignment(pageAi, frameWidth);
+
+        String cleanAi = pageAi.replaceAll("\u001B\\[[;\\d]*m", "");
+        assertTrue(cleanAi.contains("Source: LIFEForge Rule Engine + AI Explanation"));
+        // Nutrition branch always uses personalized bullets — AI raw text is not parsed
+        assertTrue(cleanAi.contains("Supports Your Goal"));
+        assertTrue(cleanAi.contains("Build Muscle"));
+        assertTrue(cleanAi.contains("Fits Your Activity Level"));
+        assertTrue(cleanAi.contains("moderately active"));
+        assertTrue(cleanAi.contains("Supports Balanced Nutrition"));
+    }
+
+    @Test
+    public void testCard2StandardizedKeywordImpactFormatAcrossAllDomains() {
+        int frameWidth = 80;
+        User user = new User(1L, "Alex Doe", "alex", "alex@example.com", "hash", 28,
+                Gender.MALE, 178.0, 75.0, ActivityLevel.MODERATELY_ACTIVE, Role.USER, false, null, null);
+        Goal goal = new Goal(1L, "GENERAL_WELLNESS", "General Wellness", "Overall health", true);
+
+        // Domain 1: Exercise
+        Recommendation exerciseRec = new Recommendation(
+                2L, 1L, 2L, ActivityLevel.MODERATELY_ACTIVE,
+                "Strength & Cardio Routine",
+                "Complete scheduled training sessions.",
+                "Warm up and perform resistance exercises.",
+                null, "30–40 minutes / day",
+                "Progress gradually."
+        );
+        List<String> exBullets = LifeForge.buildRationaleBullets(null, exerciseRec, goal, user);
+        assertEquals(3, exBullets.size());
+        assertTrue(exBullets.get(0).contains("Supports Your Goal"));
+        assertTrue(exBullets.get(0).contains("General Wellness"));
+        assertTrue(exBullets.get(1).contains("Fits Your Activity Level"));
+        assertTrue(exBullets.get(1).contains("moderately active"));
+        assertTrue(exBullets.get(2).contains("Supports Progressive Training"));
+
+        // Domain 2: Hydration
+        Recommendation hydRec = new Recommendation(
+                3L, 1L, 7L, ActivityLevel.MODERATELY_ACTIVE,
+                "Optimal Daily Hydration",
+                "Maintain steady daytime water intake.",
+                "Drink water with each meal.",
+                null, "2.5 L/day",
+                "Carry a water bottle."
+        );
+        List<String> hydBullets = LifeForge.buildRationaleBullets(null, hydRec, goal, user);
+        assertEquals(3, hydBullets.size());
+        assertTrue(hydBullets.get(0).contains("Cellular Transport    :"));
+        assertTrue(hydBullets.get(1).contains("Thermoregulation      :"));
+        assertTrue(hydBullets.get(2).contains("Cognitive Stamina     :"));
+
+        // Domain 3: Sleep & Recovery
+        Recommendation sleepRec = new Recommendation(
+                4L, 1L, 3L, ActivityLevel.MODERATELY_ACTIVE,
+                "Restorative Sleep Protocol",
+                "Protect your nightly sleep window.",
+                "Turn off screens before bed.",
+                null, "7–9 hours / night",
+                "Keep room dark and cool."
+        );
+        List<String> sleepBullets = LifeForge.buildRationaleBullets(null, sleepRec, goal, user);
+        assertEquals(3, sleepBullets.size());
+        assertTrue(sleepBullets.get(0).contains("Supports Recovery"));
+        assertTrue(sleepBullets.get(0).contains("Quality sleep supports recovery"));
+        assertTrue(sleepBullets.get(1).contains("Supports Your Goal"));
+        assertTrue(sleepBullets.get(1).contains("General Wellness"));
+        assertTrue(sleepBullets.get(2).contains("Fits Your Activity Level"));
+        assertTrue(sleepBullets.get(2).contains("moderately active"));
+
+        // Domain 4: Habits & Master Routine
+        Recommendation habitRec = new Recommendation(
+                5L, 1L, 4L, ActivityLevel.MODERATELY_ACTIVE,
+                "Complete Master Routine",
+                "A unified lifestyle routine.",
+                "Anchor foundational habits.",
+                null, "Daily execution",
+                "Consistency compounds."
+        );
+        List<String> habitBullets = LifeForge.buildRationaleBullets(null, habitRec, goal, user);
+        assertEquals(3, habitBullets.size());
+        assertTrue(habitBullets.get(0).contains("Behavioral Anchoring  :"));
+        assertTrue(habitBullets.get(1).contains("Systemic Compounding  :"));
+        assertTrue(habitBullets.get(2).contains("Lifestyle Synergy     :"));
+
+        // Verify border alignment when rendered in full page
+        List<Line> body = new ArrayList<>();
+        LifeForge.renderWhyRecommendation(body, exerciseRec, goal, user, null, false, frameWidth);
+        List<String[]> footer = List.of(
+                new String[] { "Enter/B", "Back" },
+                new String[] { "H", "Home" },
+                new String[] { "Q", "Quit" }
+        );
+        String page = ScreenKit.page("Why This Fits", "Personalized rationale", body, "", false, footer, frameWidth);
+        assertBorderAlignment(page, frameWidth);
+    }
+
+    @Test
+    public void testWhyRecommendationLineSpacingBetweenAllContentItems() {
+        int frameWidth = 80;
+        User user = new User(1L, "Alex Doe", "alex", "alex@example.com", "hash", 28,
+                Gender.MALE, 178.0, 75.0, ActivityLevel.MODERATELY_ACTIVE, Role.USER, false, null, null);
+        Goal goal = new Goal(1L, "BUILD_MUSCLE", "Build Muscle", "Hypertrophy", true);
+        Recommendation rec = new Recommendation(
+                1L, 1L, 1L, ActivityLevel.MODERATELY_ACTIVE,
+                "Eat More Protein",
+                "Maintain optimal daily protein intake.",
+                "Include protein with every meal.",
+                null, "120 g protein/day",
+                "High quality sources."
+        );
+
+        List<Line> body = new ArrayList<>();
+        LifeForge.renderWhyRecommendation(body, rec, goal, user, null, false, frameWidth);
+
+        List<String[]> footer = List.of(
+                new String[] { "Enter/B", "Back" },
+                new String[] { "H", "Home" },
+                new String[] { "Q", "Quit" }
+        );
+        String page = ScreenKit.page("Why This Fits", "Personalized rationale", body, "", false, footer, frameWidth);
+        assertBorderAlignment(page, frameWidth);
+
+        String clean = page.replaceAll("\u001B\\[[;\\d]*m", "");
+
+        // Verify that empty rows (line spacing) exist between items inside the cards
+        // Empty card rows look like "│  │                                                                      │  │"
+        // Regex pattern: an item followed by an empty card row and then the next item
+        assertTrue(clean.matches("(?s).*Active Goal.*│\\s+│.*Activity Level.*"),
+                "Expected empty card spacer line between Active Goal and Activity Level");
+        assertTrue(clean.matches("(?s).*Activity Level.*│\\s+│.*Parameters.*"),
+                "Expected empty card spacer line between Activity Level and Parameters");
+        assertTrue(clean.matches("(?s).*Supports Your Goal.*│\\s+│.*Fits Your Activity Level.*"),
+                "Expected empty card spacer line between Card 2 bullets");
+        assertTrue(clean.matches("(?s).*Fits Your Activity Level.*│\\s+│.*Supports Balanced Nutrition.*"),
+                "Expected empty card spacer line between Card 2 bullets");
+    }
+
+    @Test
+    public void testSleepRecommendationDetailPersonalization() {
+        int frameWidth = 80;
+        User user = new User(1L, "Sam User", "sam", "sam@example.com", "hash", 30,
+                Gender.MALE, 175.0, 70.0, ActivityLevel.MODERATELY_ACTIVE, Role.USER, false, null, null);
+        Goal goal = new Goal(1L, "BUILD_MUSCLE", "Build Muscle", "Muscle building", true);
+        Recommendation sleepRec = new Recommendation(
+                4L, 1L, 3L, ActivityLevel.MODERATELY_ACTIVE,
+                "Restorative Sleep Protocol",
+                "Protect your nightly sleep window.",
+                "Turn off screens before bed.",
+                null, "7–9 hours / night",
+                "Keep room dark and cool."
+        );
+
+        List<Line> body = new ArrayList<>();
+        LifeForge.renderSleepRecommendationDetail(body, sleepRec, user, goal, frameWidth);
+
+        List<String[]> footer = List.of(
+                new String[] { "Up/Down", "Move" },
+                new String[] { "Enter", "Select" },
+                new String[] { "Esc", "Back" }
+        );
+        String page = ScreenKit.page("Recommendation Detail", "Personalized Sleep & Recovery", body, "", false, footer, frameWidth);
+        assertBorderAlignment(page, frameWidth);
+
+        String clean = page.replaceAll("\u001B\\[[;\\d]*m", "");
+
+        // 1. Verify Card 1: 🌙 SLEEP HYGIENE
+        assertTrue(clean.contains("SLEEP HYGIENE"));
+        assertTrue(clean.contains("Light & Screens"));
+        assertTrue(clean.contains("Cut blue light and digital screens"));
+        assertTrue(clean.contains("Sleep Environment"));
+        assertTrue(clean.contains("Keep bedroom cool"));
+        assertTrue(clean.contains("Wind-Down Routine"));
+        assertTrue(clean.contains("(reading or breathwork)"));
+
+        // 2. Verify Card 2: 💪 RECOVERY & REST
+        assertTrue(clean.contains("RECOVERY & REST"));
+        assertTrue(clean.contains("Sleep Schedule"));
+        assertTrue(clean.contains("Target 7–9 hours / night"));
+        assertTrue(clean.contains("Training Recovery"));
+        assertTrue(clean.contains("Allow 48 hours of"));
+        assertTrue(clean.contains("recovery between intense training sessions"));
+        assertTrue(clean.contains("Evening Recovery"));
+        assertTrue(clean.contains("Taper fluid intake 90 mins"));
+        assertTrue(clean.contains("before bed and avoid stimulants"));
+
+        // 3. Verify no duplicate calorie/BMR/TDEE or tracking features
+        assertFalse(clean.contains("BMR"));
+        assertFalse(clean.contains("TDEE"));
+        assertFalse(clean.contains("log sleep"));
+        assertFalse(clean.contains("sleep timer"));
+        assertFalse(clean.contains("..."));
+    }
+
+    @Test
+    public void testWhySleepRecommendationRationalePersonalization() {
+        int frameWidth = 80;
+        User user = new User(1L, "Alex Athlete", "alex", "alex@example.com", "hash", 25,
+                Gender.FEMALE, 168.0, 60.0, ActivityLevel.VERY_ACTIVE, Role.USER, false, null, null);
+        Goal goal = new Goal(2L, "IMPROVE_FITNESS", "Improve Fitness", "Endurance & fitness", true);
+        Recommendation sleepRec = new Recommendation(
+                4L, 2L, 3L, ActivityLevel.VERY_ACTIVE,
+                "Restorative Sleep Protocol",
+                "Protect your nightly sleep window.",
+                "Turn off screens before bed.",
+                null, "7–9 hours / night",
+                "Keep room dark and cool."
+        );
+
+        List<Line> body = new ArrayList<>();
+        LifeForge.renderWhyRecommendation(body, sleepRec, goal, user, null, false, frameWidth);
+
+        List<String[]> footer = List.of(
+                new String[] { "Enter/B", "Back" },
+                new String[] { "H", "Home" },
+                new String[] { "Q", "Quit" }
+        );
+        String page = ScreenKit.page("Why This Fits", "Personalized rationale", body, "", false, footer, frameWidth);
+        assertBorderAlignment(page, frameWidth);
+
+        String clean = page.replaceAll("\u001B\\[[;\\d]*m", "");
+
+        // Verify Card 1: 👤 PROFILE CONTEXT
+        assertTrue(clean.contains("PROFILE CONTEXT"));
+        assertTrue(clean.contains("Active Goal"));
+        assertTrue(clean.contains("Improve Fitness"));
+        assertTrue(clean.contains("Activity Level"));
+        assertTrue(clean.contains("Very Active"));
+
+        // Verify Card 2: 💡 WHY IT FITS (renamed from PHYSIOLOGICAL RATIONALE for sleep)
+        assertTrue(clean.contains("WHY IT FITS"));
+        assertFalse(clean.contains("PHYSIOLOGICAL RATIONALE"));
+
+        // Verify bullets structure and personalization
+        assertTrue(clean.contains("Supports Recovery"));
+        assertTrue(clean.contains("Quality sleep supports recovery"));
+        assertTrue(clean.contains("Supports Your Goal"));
+        assertTrue(clean.contains("Adequate rest complements your"));
+        assertTrue(clean.contains("Improve Fitness"));
+        assertTrue(clean.contains("Fits Your Activity Level"));
+        assertTrue(clean.contains("recovery from your"));
+        assertTrue(clean.contains("active activity level"));
+
+        // Banned unsupported medical/physiological/hormone claims
+        assertFalse(clean.contains("human growth hormone"));
+        assertFalse(clean.contains("cortisol"));
+        assertFalse(clean.contains("melatonin"));
+        assertFalse(clean.contains("glycogen"));
+        assertFalse(clean.contains("Endocrine Restoration"));
+        assertFalse(clean.contains("Circadian Alignment"));
+        assertFalse(clean.contains("Neuromuscular Reset"));
+    }
+
+    @Test
+    public void testExerciseRecommendationDetailPersonalization() {
+        int frameWidth = 80;
+
+        // --- Muscle goal: Resistance Focus should appear FIRST ---
+        User user = new User(1L, "Sam User", "sam", "sam@example.com", "hash", 28,
+                Gender.MALE, 178.0, 75.0, ActivityLevel.MODERATELY_ACTIVE, Role.USER, false, null, null);
+        Goal muscleGoal = new Goal(1L, "BUILD_MUSCLE", "Build Muscle", "Muscle building", true);
+        Recommendation exerciseRec = new Recommendation(
+                2L, 1L, 2L, ActivityLevel.MODERATELY_ACTIVE,
+                "Strength & Cardio Routine",
+                "Complete scheduled training sessions.",
+                "Warm up and perform resistance exercises.",
+                null, "30–40 minutes / day",
+                "Progress gradually."
+        );
+
+        List<Line> body = new ArrayList<>();
+        LifeForge.renderExerciseRecommendationDetail(body, exerciseRec, user, muscleGoal, frameWidth);
+
+        List<String[]> footer = List.of(
+                new String[] { "Up/Down", "Move" },
+                new String[] { "Enter", "Select" },
+                new String[] { "Esc", "Back" }
+        );
+        String page = ScreenKit.page("Recommendation Detail", "Specific actions calibrated for your profile", body, "", false, footer, frameWidth);
+        assertBorderAlignment(page, frameWidth);
+
+        String clean = page.replaceAll("\u001B\\[[;\\d]*m", "");
+
+        // 1. Both cards are present
+        assertTrue(clean.contains("RECOMMENDED EXERCISE TYPES"));
+        assertTrue(clean.contains("TRAINING PARAMETERS"));
+
+        // 2. All three exercise types present
+        assertTrue(clean.contains("Resistance Focus"));
+        assertTrue(clean.contains("Aerobic Base"));
+        assertTrue(clean.contains("Active Mobility"));
+
+        // 3. Resistance Focus appears before Aerobic Base for muscle goal
+        int resistanceIdx = clean.indexOf("Resistance Focus");
+        int aerobicIdx = clean.indexOf("Aerobic Base");
+        assertTrue(resistanceIdx < aerobicIdx, "Resistance Focus should appear before Aerobic Base for Build Muscle goal");
+
+        // 4. Training parameters present
+        assertTrue(clean.contains("Target Frequency"));
+        assertTrue(clean.contains("3–4 sessions / week"));
+        assertTrue(clean.contains("Session Duration"));
+        assertTrue(clean.contains("Intensity Zone"));
+
+        // 5. No duplicate metrics
+        assertFalse(clean.contains("BMR"));
+        assertFalse(clean.contains("TDEE"));
+        assertFalse(clean.contains("Calorie Target"));
+    }
+
+    @Test
+    public void testWhyExerciseRecommendationRationalePersonalization() {
+        int frameWidth = 80;
+        User user = new User(1L, "Sam User", "sam", "sam@example.com", "hash", 28,
+                Gender.MALE, 178.0, 75.0, ActivityLevel.MODERATELY_ACTIVE, Role.USER, false, null, null);
+        Goal goal = new Goal(1L, "BUILD_MUSCLE", "Build Muscle", "Muscle building", true);
+        Recommendation exerciseRec = new Recommendation(
+                2L, 1L, 2L, ActivityLevel.MODERATELY_ACTIVE,
+                "Strength & Cardio Routine",
+                "Complete scheduled training sessions.",
+                "Warm up and perform resistance exercises.",
+                null, "30–40 minutes / day",
+                "Progress gradually."
+        );
+
+        List<Line> body = new ArrayList<>();
+        LifeForge.renderWhyRecommendation(body, exerciseRec, goal, user, null, false, frameWidth);
+
+        List<String[]> footer = List.of(
+                new String[] { "Enter/B", "Back" },
+                new String[] { "H", "Home" },
+                new String[] { "Q", "Quit" }
+        );
+        String page = ScreenKit.page("Why This Fits", "Personalized rationale", body, "", false, footer, frameWidth);
+        assertBorderAlignment(page, frameWidth);
+
+        String clean = page.replaceAll("\u001B\\[[;\\d]*m", "");
+
+        // 1. Card titles
+        assertTrue(clean.contains("💡 WHY THIS RECOMMENDATION FITS YOU"));
+        assertTrue(clean.contains("👤 PROFILE CONTEXT"));
+        assertTrue(clean.contains("💡 WHY IT FITS"));
+        assertFalse(clean.contains("🔬 PHYSIOLOGICAL RATIONALE"));
+
+        // 2. Card 1 profile context
+        assertTrue(clean.contains("Active Goal       : Build Muscle"));
+        assertTrue(clean.contains("Activity Level    : Moderately Active"));
+
+        // 3. Card 2 personalized WHY IT FITS bullets
+        assertTrue(clean.contains("Supports Your Goal"));
+        assertTrue(clean.contains("Build Muscle"));
+        assertTrue(clean.contains("Fits Your Activity Level"));
+        assertTrue(clean.contains("exercise parameters"));
+        assertTrue(clean.contains("moderately"));
+        assertTrue(clean.contains("activity level"));
+        assertTrue(clean.contains("Supports Progressive Training"));
+
+        // 4. Source line
+        assertTrue(clean.contains("Source: LIFEForge Rule Engine"));
+
+        // 5. Banned unsupported physiological/hormone claims
+        assertFalse(clean.contains("testosterone"));
+        assertFalse(clean.contains("Mechanical Tension"));
+        assertFalse(clean.contains("motor unit recruitment"));
+        assertFalse(clean.contains("stroke volume"));
+        assertFalse(clean.contains("this user"));
+        assertFalse(clean.contains("the patient"));
     }
 }

@@ -181,7 +181,11 @@ public class GoalCompatibilityStatus {
         lines.add(Line.of(borderStyle, indent + "┌" + "─".repeat(cardWidth - 2) + "┐"));
 
         // 2. Status Title
-        lines.add(renderRow(indent, cardWidth, borderStyle, titleStyle, level.getTitle()));
+        String titleText = level.getTitle();
+        if (level == Level.WARNING) {
+            titleText = "⚠  WARNING";
+        }
+        lines.add(renderRow(indent, cardWidth, borderStyle, titleStyle, titleText));
 
         // 3. Subtitle (if warning)
         if (level.isWarning()) {

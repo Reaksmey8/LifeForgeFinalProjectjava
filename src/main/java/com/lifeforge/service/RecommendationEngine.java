@@ -118,16 +118,16 @@ public class RecommendationEngine {
         blueprint.addMidday("\uD83C\uDF7D", "Nutrition", // 🍽
                 "Follow a balanced lunch structure with lean protein, colorful vegetables, and portion control.");
         if (goalCode.contains("MUSCLE")) {
-            blueprint.addMidday("\uD83C\uDFCB", "Exercise", // 🏋
+            blueprint.addMidday("\uD83C\uDFC3", "Exercise", // 🏃
                     "Execute scheduled resistance training focusing on progressive overload and compound lifts.");
         } else if (goalCode.contains("FITNESS") || goalCode.contains("WEIGHT")) {
-            blueprint.addMidday("\uD83C\uDFCB", "Exercise", // 🏋
+            blueprint.addMidday("\uD83C\uDFC3", "Exercise", // 🏃
                     "Complete a scheduled workout or brisk 25\u201330 minute walk to elevate heart rate safely.");
         } else if (goalCode.contains("SLEEP")) {
-            blueprint.addMidday("\uD83C\uDFCB", "Exercise", // 🏋
+            blueprint.addMidday("\uD83C\uDFC3", "Exercise", // 🏃
                     "Engage in moderate daytime physical activity to reinforce natural circadian drive.");
         } else {
-            blueprint.addMidday("\uD83C\uDFCB", "Exercise", // 🏋
+            blueprint.addMidday("\uD83C\uDFC3", "Exercise", // 🏃
                     "Maintain structured physical movement appropriate for your current activity level.");
         }
         blueprint.addMidday("\uD83D\uDCA7", "Hydration", // 💧

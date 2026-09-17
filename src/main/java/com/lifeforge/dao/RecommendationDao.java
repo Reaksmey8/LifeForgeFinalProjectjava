@@ -500,4 +500,78 @@ public class RecommendationDao {
 
         return r;
     }
+
+    public Recommendation findOrCreateDynamicRecommendation(
+            Long goalId,
+            Long categoryId,
+            ActivityLevel activityLevel,
+            String title,
+            String description,
+            String recommendedActions,
+            String suggestedTarget,
+            String examples,
+            String importantNotes
+    ) throws SQLException {
+        String actStr = activityLevel != null ? activityLevel.name() : "ALL";
+        String checkSql = """
+                SELECT * FROM recommendations
+                WHERE goal_id = ?
+                  AND category_id = ?
+                  AND (activity_level = ? OR activity_level = 'ALL' OR activity_level IS NULL)
+                ORDER BY id LIMIT 1
+                """;
+
+        try (Connection conn = DatabaseConfig.getConnection();
+             PreparedStatement ps = conn.prepareStatement(checkSql)) {
+            ps.setLong(1, goalId != null ? goalId : 1L);
+            ps.setLong(2, categoryId != null ? categoryId : 5L);
+            ps.setString(3, actStr);
+
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    Recommendation existing = mapRow(rs);
+                    String updateSql = """
+                            UPDATE recommendations
+                            SET title = ?, description = ?, recommended_actions = ?,
+                                suggested_target = ?, examples = ?, important_notes = ?,
+                                activity_level = ?, updated_at = NOW()
+                            WHERE id = ?
+                            """;
+                    try (PreparedStatement ups = conn.prepareStatement(updateSql)) {
+                        ups.setString(1, title);
+                        ups.setString(2, description);
+                        ups.setString(3, recommendedActions);
+                        ups.setString(4, suggestedTarget);
+                        ups.setString(5, examples);
+                        ups.setString(6, importantNotes);
+                        ups.setString(7, actStr);
+                        ups.setLong(8, existing.getId());
+                        ups.executeUpdate();
+                    }
+                    existing.setTitle(title);
+                    existing.setDescription(description);
+                    existing.setRecommendedActions(recommendedActions);
+                    existing.setSuggestedTarget(suggestedTarget);
+                    existing.setExamples(examples);
+                    existing.setImportantNotes(importantNotes);
+                    existing.setActivityLevel(activityLevel);
+                    return existing;
+                }
+            }
+        }
+
+        Recommendation r = new Recommendation(
+                null,
+                goalId != null ? goalId : 1L,
+                categoryId != null ? categoryId : 5L,
+                activityLevel,
+                title,
+                description,
+                recommendedActions,
+                suggestedTarget,
+                examples,
+                importantNotes
+        );
+        return create(r);
+    }
 }

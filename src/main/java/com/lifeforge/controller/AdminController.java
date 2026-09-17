@@ -25,17 +25,20 @@ public class AdminController extends BaseController {
     private final AdminService adminService;
     private final AnalyticsService analyticsService;
     private final AuditLogService auditLogService;
-    private final PasswordResetDao passwordResetDao;
     private final Session session;
+
+    public AdminController(AdminService adminService, AnalyticsService analyticsService,
+                           AuditLogService auditLogService, Session session) {
+        this.adminService = adminService;
+        this.analyticsService = analyticsService;
+        this.auditLogService = auditLogService;
+        this.session = session;
+    }
 
     public AdminController(AdminService adminService, AnalyticsService analyticsService,
                            AuditLogService auditLogService, PasswordResetDao passwordResetDao,
                            Session session) {
-        this.adminService = adminService;
-        this.analyticsService = analyticsService;
-        this.auditLogService = auditLogService;
-        this.passwordResetDao = passwordResetDao;
-        this.session = session;
+        this(adminService, analyticsService, auditLogService, session);
     }
 
     private User actor() {
@@ -170,36 +173,6 @@ public class AdminController extends BaseController {
             setError(e, "Failed to load audit logs.");
             return null;
         }
-    }
-
-    /** Admin review listing of password reset requests, newest first. */
-    public List<PasswordReset> listPasswordResets() {
-        User actor = actor();
-        if (notAdmin(actor)) {
-            return null;
-        }
-        try {
-            return passwordResetDao.findAll();
-        } catch (SQLException e) {
-            setError(e, "Failed to load password reset requests.");
-            return new ArrayList<>();
-        }
-    }
-
-    public boolean approveResetRequest(Long requestId) {
-        User actor = actor();
-        if (notAdmin(actor)) {
-            return false;
-        }
-        return applyResult(adminService.approveResetRequest(actor, requestId));
-    }
-
-    public boolean rejectResetRequest(Long requestId) {
-        User actor = actor();
-        if (notAdmin(actor)) {
-            return false;
-        }
-        return applyResult(adminService.rejectResetRequest(actor, requestId));
     }
 
     private boolean applyResult(AdminService.AdminActionResult result) {

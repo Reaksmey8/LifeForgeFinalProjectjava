@@ -213,7 +213,7 @@ public class RecommendationService {
     private String categoryEmoji(String categoryName) {
         String lower = categoryName.toLowerCase();
         if (lower.contains("nutrition")) return "\uD83C\uDF4E"; // 🍎
-        if (lower.contains("exercise")) return "\uD83C\uDFCB";  // 🏋
+        if (lower.contains("exercise")) return "\uD83C\uDFC3";  // 🏃
         if (lower.contains("hydration")) return "\uD83D\uDCA7"; // 💧
         if (lower.contains("sleep")) return "\uD83D\uDE34";     // 😴
         if (lower.contains("habit")) return "\uD83C\uDF31";     // 🌱
@@ -271,6 +271,13 @@ public class RecommendationService {
             return aiService.chatGlobal(user, goal, plan, cs, hydration, calorieRelevant, recentConversation, question);
         }
         return new AiChatResponse("AI is currently unavailable. Your official LifeForge plan is still available.", false);
+    }
+
+    /** Clears the in-memory multi-turn conversation history with the AI Assistant. */
+    public void resetAiConversation() {
+        if (aiExplanationService instanceof AiExplanationService aiService) {
+            aiService.clearConversationHistory();
+        }
     }
 
     public Optional<Recommendation> findRecommendationById(Long id) throws SQLException {
@@ -436,18 +443,33 @@ public class RecommendationService {
         String notes = "Consistency across all 5 pillars compounds over time. "
                 + "Focus on executing small, sustainable daily actions rather than seeking perfection.";
 
-        Recommendation masterRec = new Recommendation(
-                -1L,
-                goal != null ? goal.getId() : null,
-                masterCategory != null ? masterCategory.getId() : 5L,
-                actLevel,
-                title,
-                description,
-                combinedActions.toString(),
-                targetSummary.toString(),
-                examples,
-                notes
-        );
+        Recommendation masterRec;
+        try {
+            masterRec = recommendationDao.findOrCreateDynamicRecommendation(
+                    goal != null ? goal.getId() : 1L,
+                    masterCategory != null ? masterCategory.getId() : 5L,
+                    actLevel,
+                    title,
+                    description,
+                    combinedActions.toString(),
+                    targetSummary.toString(),
+                    examples,
+                    notes
+            );
+        } catch (Exception e) {
+            masterRec = new Recommendation(
+                    -1L,
+                    goal != null ? goal.getId() : null,
+                    masterCategory != null ? masterCategory.getId() : 5L,
+                    actLevel,
+                    title,
+                    description,
+                    combinedActions.toString(),
+                    targetSummary.toString(),
+                    examples,
+                    notes
+            );
+        }
 
         return new RecommendationResult(
                 masterRec,
@@ -544,17 +566,49 @@ public class RecommendationService {
         String goalName = goal != null ? goal.getName() : "Daily Wellness";
         String actions = buildDailyMicroHabitsActions(goal, actLevel);
 
-        return new Recommendation(
-                -1L,
-                goal != null ? goal.getId() : null,
-                category.getId(),
-                actLevel,
-                "Daily Micro-Habits (" + goalName + ")",
-                "Small, practical daily actions calibrated for " + goalName + " and your activity level.",
-                actions,
-                "3–4 daily micro-actions",
-                "Meal prep ahead of time, evening wind-down routine",
-                "These daily micro-habits are practical guidance to support your main recommendation, not a completion checklist."
+        try {
+            return recommendationDao.findOrCreateDynamicRecommendation(
+                    goal != null ? goal.getId() : 1L,
+                    category.getId(),
+                    actLevel,
+                    "Daily Micro-Habits (" + goalName + ")",
+                    "Small, practical daily actions calibrated for " + goalName + " and your activity level.",
+                    actions,
+                    "3–4 daily micro-actions",
+                    "Meal prep ahead of time, evening wind-down routine",
+                    "These daily micro-habits are practical guidance to support your main recommendation, not a completion checklist."
+            );
+        } catch (Exception e) {
+            return new Recommendation(
+                    -1L,
+                    goal != null ? goal.getId() : null,
+                    category.getId(),
+                    actLevel,
+                    "Daily Micro-Habits (" + goalName + ")",
+                    "Small, practical daily actions calibrated for " + goalName + " and your activity level.",
+                    actions,
+                    "3–4 daily micro-actions",
+                    "Meal prep ahead of time, evening wind-down routine",
+                    "These daily micro-habits are practical guidance to support your main recommendation, not a completion checklist."
+            );
+        }
+    }
+
+    public Recommendation persistDynamicRecommendation(Recommendation rec) throws SQLException {
+        if (rec == null) return null;
+        if (rec.getId() != null && rec.getId() > 0) return rec;
+        Recommendation persisted = recommendationDao.findOrCreateDynamicRecommendation(
+                rec.getGoalId() != null ? rec.getGoalId() : 1L,
+                rec.getCategoryId() != null ? rec.getCategoryId() : 5L,
+                rec.getActivityLevel(),
+                rec.getTitle(),
+                rec.getDescription(),
+                rec.getRecommendedActions(),
+                rec.getSuggestedTarget(),
+                rec.getExamples(),
+                rec.getImportantNotes()
         );
+        rec.setId(persisted.getId());
+        return persisted;
     }
 }

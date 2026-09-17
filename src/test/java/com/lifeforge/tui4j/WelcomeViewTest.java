@@ -1,10 +1,15 @@
 package com.lifeforge.tui4j;
 
+import com.lifeforge.AppContext;
 import com.lifeforge.tui4j.ScreenKit.Line;
+import com.williamcallahan.tui4j.compat.bubbletea.input.key.Key;
+import com.williamcallahan.tui4j.compat.bubbletea.input.key.KeyType;
+import com.williamcallahan.tui4j.compat.bubbletea.message.KeyPressMessage;
 import com.williamcallahan.tui4j.term.TerminalInfo;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -66,17 +71,18 @@ public class WelcomeViewTest {
     @Test
     public void testRenderVisual() {
         List<ScreenKit.Line> body = new ArrayList<>();
-        int inner = Math.min(98, Math.max(38, 80 - 6));
-        String logoAscii = """
- _     ___ _____ _____ _____ ___  ____   ____ _____ 
-| |   |_ _|  ___| ____|  ___/ _ \\|  _ \\ / ___| ____|
-| |    | || |_  |  _| | |_ | | | | |_) | |  _|  _|  
-| |___ | ||  _| | |___|  _|| |_| |  _ <| |_| | |___ 
-|_____|___|_|   |_____|_|   \\___/|_| \\_\\\\____|_____|""";
+        int inner = Math.min(100, Math.max(40, 80)) - 2;
+        List<String> logoLines = List.of(
+                "██╗     ██╗███████╗███████╗███████╗ ██████╗ ██████╗  ██████╗ ███████╗",
+                "██║     ██║██╔════╝██╔════╝██╔════╝██╔═══██╗██╔══██╗██╔════╝ ██╔════╝",
+                "██║     ██║█████╗  █████╗  █████╗  ██║   ██║██████╔╝██║  ███╗█████╗  ",
+                "██║     ██║██╔══╝  ██╔══╝  ██╔══╝  ██║   ██║██╔══██╗██║   ██║██╔══╝  ",
+                "███████╗██║██║     ███████╗██║     ╚██████╔╝██║  ██║╚██████╔╝███████╗",
+                "╚══════╝╚═╝╚═╝     ╚══════╝╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝"
+        );
 
         body.add(ScreenKit.Line.blank());
-        for (String line : logoAscii.split("\\R")) {
-            if (line.isEmpty()) continue;
+        for (String line : logoLines) {
             body.add(ScreenKit.Line.of(Theme.title(), Theme.padCenter(line, inner)));
         }
         body.add(ScreenKit.Line.blank());
@@ -84,13 +90,119 @@ public class WelcomeViewTest {
         body.add(ScreenKit.Line.of(Theme.dim(), Theme.padCenter("v1.0.0", inner)));
         body.add(ScreenKit.Line.blank());
         body.add(ScreenKit.Line.blank());
-        body.addAll(ScreenKit.menuCenter(List.of("Login", "Register Account", "Quit"), 0, inner));
+
+        String item0 = Theme.render(Theme.headingCyan(), "> ")
+                + Theme.render(Theme.headingCyan(), "[L]") + " "
+                + Theme.render(Theme.headingCyan(), "Login");
+        String item1 = Theme.render(Theme.dim(), "  ")
+                + Theme.render(Theme.headingCyan(), "[R]") + " "
+                + Theme.render(Theme.text(), "Register Account");
+        String item2 = Theme.render(Theme.dim(), "  ")
+                + Theme.render(Theme.headingCyan(), "[Q]") + " "
+                + Theme.render(Theme.text(), "Quit");
+        String sep = Theme.render(Theme.dim(), "     •     ");
+        String menuRow = item0 + sep + item1 + sep + item2;
+        body.add(ScreenKit.Line.of(Theme.plain(), Theme.padCenter(menuRow, inner)));
         body.add(ScreenKit.Line.blank());
 
-        List<String[]> footer = Collections.singletonList(new String[]{"Up/Down", "Navigate"});
+        List<String[]> footer = List.of(
+                new String[] { "←/→", "Select" },
+                new String[] { "Enter", "Open" },
+                new String[] { "L", "Login" },
+                new String[] { "R", "Register" },
+                new String[] { "Q", "Quit" }
+        );
 
         String page = ScreenKit.page("Welcome", "Personalized health, one goal at a time", body, "", false, footer, 80);
         System.out.println("\n=== RENDERED WELCOME SCREEN ===\n" + page + "\n===============================\n");
+
+        assertNotNull(page);
+        String clean = page.replaceAll("\u001B\\[[;\\d]*m", "");
+        assertTrue(clean.contains("██╗     ██╗███████╗"), "Contains straight ANSI Shadow Unicode banner");
+        assertTrue(clean.contains("[L] Login"), "Contains L Login");
+        assertTrue(clean.contains("[R] Register Account"), "Contains R Register Account");
+        assertTrue(clean.contains("[Q] Quit"), "Contains Q Quit");
+        assertTrue(clean.contains("•"), "Contains bullet separator");
+        assertFalse(clean.contains("> Register Account"), "Does not contain vertical menu");
+    }
+
+    @Test
+    public void testWelcomeScreenViewAndKeyNavigation() throws Exception {
+        LifeForge tui = new LifeForge(AppContext.build());
+        String rendered = tui.view();
+        assertNotNull(rendered);
+
+        String clean = rendered.replaceAll("\u001B\\[[;\\d]*m", "");
+        assertTrue(clean.contains("██╗     ██╗███████╗"), "Welcome view should contain straight ANSI Shadow Unicode banner");
+        assertTrue(clean.contains("> [L] Login"), "Welcome view should highlight focused item 0");
+        assertTrue(clean.contains("[R] Register Account"), "Welcome view should contain item 1");
+        assertTrue(clean.contains("[Q] Quit"), "Welcome view should contain item 2");
+
+        Field screenField = LifeForge.class.getDeclaredField("screen");
+        screenField.setAccessible(true);
+        Field selField = LifeForge.class.getDeclaredField("sel");
+        selField.setAccessible(true);
+        assertEquals("WELCOME", screenField.get(tui).toString());
+        assertEquals(0, selField.get(tui));
+
+        // Test Right arrow key -> moves selection to 1 (Register)
+        tui.update(new KeyPressMessage(new Key(KeyType.KeyRight)));
+        assertEquals(1, selField.get(tui));
+        String view1 = tui.view().replaceAll("\u001B\\[[;\\d]*m", "");
+        assertTrue(view1.contains("> [R] Register Account"), "Item 1 should now be focused");
+
+        // Test Enter on item 1 -> navigates to REGISTER
+        tui.update(new KeyPressMessage(new Key(KeyType.keyCR)));
+        assertEquals("REGISTER", screenField.get(tui).toString());
+
+        // Back to welcome
+        tui.update(new KeyPressMessage(new Key(KeyType.keyESC)));
+        assertEquals("WELCOME", screenField.get(tui).toString());
+
+        // Test Right arrow key twice -> moves selection to 2 (Quit)
+        tui.update(new KeyPressMessage(new Key(KeyType.KeyRight)));
+        tui.update(new KeyPressMessage(new Key(KeyType.KeyRight)));
+        assertEquals(2, selField.get(tui));
+        String view2 = tui.view().replaceAll("\u001B\\[[;\\d]*m", "");
+        assertTrue(view2.contains("> [Q] Quit"), "Item 2 should now be focused");
+
+        // Test Left arrow key -> moves selection back to 1
+        tui.update(new KeyPressMessage(new Key(KeyType.KeyLeft)));
+        assertEquals(1, selField.get(tui));
+
+        // Test Left arrow key again -> moves selection back to 0
+        tui.update(new KeyPressMessage(new Key(KeyType.KeyLeft)));
+        assertEquals(0, selField.get(tui));
+
+        // Test Enter on item 0 -> navigates to LOGIN
+        tui.update(new KeyPressMessage(new Key(KeyType.keyCR)));
+        assertEquals("LOGIN", screenField.get(tui).toString());
+
+        // Back to welcome
+        tui.update(new KeyPressMessage(new Key(KeyType.keyESC)));
+        assertEquals("WELCOME", screenField.get(tui).toString());
+
+        // Test direct L shortcut
+        tui.update(new KeyPressMessage(new Key(KeyType.KeyRunes, new char[] { 'l' })));
+        assertEquals("LOGIN", screenField.get(tui).toString());
+
+        // Back to welcome
+        tui.update(new KeyPressMessage(new Key(KeyType.keyESC)));
+        assertEquals("WELCOME", screenField.get(tui).toString());
+
+        // Test direct R shortcut
+        tui.update(new KeyPressMessage(new Key(KeyType.KeyRunes, new char[] { 'R' })));
+        assertEquals("REGISTER", screenField.get(tui).toString());
+
+        // Back to welcome
+        tui.update(new KeyPressMessage(new Key(KeyType.keyESC)));
+        assertEquals("WELCOME", screenField.get(tui).toString());
+
+        // Test direct Q shortcut
+        Field quittingField = LifeForge.class.getDeclaredField("quitting");
+        quittingField.setAccessible(true);
+        assertFalse((boolean) quittingField.get(tui));
+        tui.update(new KeyPressMessage(new Key(KeyType.KeyRunes, new char[] { 'q' })));
     }
 
     @Test

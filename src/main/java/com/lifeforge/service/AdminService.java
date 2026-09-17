@@ -20,12 +20,14 @@ public class AdminService {
 
     private final UserDao userDao;
     private final AuditLogService auditLogService;
-    private final PasswordResetDao resetDao;
 
-    public AdminService(UserDao userDao, AuditLogService auditLogService, PasswordResetDao resetDao) {
+    public AdminService(UserDao userDao, AuditLogService auditLogService) {
         this.userDao = userDao;
         this.auditLogService = auditLogService;
-        this.resetDao = resetDao;
+    }
+
+    public AdminService(UserDao userDao, AuditLogService auditLogService, PasswordResetDao resetDao) {
+        this(userDao, auditLogService);
     }
 
     public static class AdminActionResult {
@@ -202,63 +204,5 @@ public class AdminService {
 
     public Optional<User> findUserById(Long userId) throws SQLException {
         return userDao.findById(userId);
-    }
-
-    public AdminActionResult approveResetRequest(User actor, Long requestId) {
-        AdminActionResult authError = requireAdmin(actor);
-        if (authError != null) {
-            return authError;
-        }
-        return applyResetDecision(actor, requestId, true);
-    }
-
-    public AdminActionResult rejectResetRequest(User actor, Long requestId) {
-        AdminActionResult authError = requireAdmin(actor);
-        if (authError != null) {
-            return authError;
-        }
-        return applyResetDecision(actor, requestId, false);
-    }
-
-    /**
-     * Shared approve/reject logic. A request must still be PENDING to be
-     * decided on, and an admin can never decide on their own request.
-     */
-    private AdminActionResult applyResetDecision(User actor, Long requestId, boolean approve) {
-        if (requestId == null) {
-            return AdminActionResult.fail("A reset request ID is required.");
-        }
-        String verb = approve ? "approved" : "rejected";
-        String cannotVerb = approve ? "approve" : "reject";
-        try {
-            Optional<PasswordReset> requestOpt = resetDao.findById(requestId);
-            if (requestOpt.isEmpty()) {
-                return AdminActionResult.fail("Reset request #" + requestId + " was not found.");
-            }
-            PasswordReset request = requestOpt.get();
-            if (request.getUserId().equals(actor.getId())) {
-                return AdminActionResult.fail(
-                        "Admins cannot " + cannotVerb + " their own password reset request.");
-            }
-            if (!PasswordResetService.STATUS_PENDING.equals(request.getStatus())) {
-                return AdminActionResult.fail(
-                        "Only pending requests can be " + verb + ".");
-            }
-            resetDao.updateStatus(requestId, approve
-                    ? PasswordResetService.STATUS_APPROVED
-                    : PasswordResetService.STATUS_REJECTED);
-            auditLogService.log(actor.getId(),
-                    approve ? "PASSWORD_RESET_REQUEST_APPROVED" : "PASSWORD_RESET_REQUEST_REJECTED",
-                    "PASSWORD_RESET", requestId,
-                    "Request #" + requestId + " " + verb + " by admin " + actor.getEmail());
-            return AdminActionResult.ok(approve
-                    ? "Password reset request #" + requestId + " approved. "
-                            + "The user can now create a new password."
-                    : "Password reset request #" + requestId + " rejected. "
-                            + "The user cannot reset their password.");
-        } catch (SQLException e) {
-            return AdminActionResult.fail(
-                    "Failed to update the request due to a database error.");
-        }
     }
 }

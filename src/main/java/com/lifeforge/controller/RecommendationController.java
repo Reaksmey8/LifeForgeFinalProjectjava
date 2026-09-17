@@ -167,6 +167,11 @@ public class RecommendationController extends BaseController {
         }
     }
 
+    /** Clears the in-memory multi-turn conversation history with the AI Assistant. */
+    public void resetAiConversation() {
+        recommendationService.resetAiConversation();
+    }
+
     public List<RecommendationCategory> getTopCategories() {
         try {
             return recommendationService.getTopLevelCategories();
@@ -269,6 +274,17 @@ public class RecommendationController extends BaseController {
         } catch (SQLException e) {
             setError(e, "Failed to delete the category.");
             return false;
+        }
+    }
+
+    public Optional<Recommendation> ensurePersisted(Recommendation rec) {
+        if (rec == null) return Optional.empty();
+        if (rec.getId() != null && rec.getId() > 0) return Optional.of(rec);
+        try {
+            return Optional.ofNullable(recommendationService.persistDynamicRecommendation(rec));
+        } catch (Exception e) {
+            setError(e, "Failed to persist recommendation.");
+            return Optional.empty();
         }
     }
 }

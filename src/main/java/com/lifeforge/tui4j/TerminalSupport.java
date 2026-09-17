@@ -229,6 +229,10 @@ public final class TerminalSupport {
             // misc icons
             case 0x2713: return "v";   // ✓
             case 0x2717: return "x";   // ✕
+            case 0x2611: return "v";   // ☑
+            case 0x2610: return " ";   // ☐
+            case 0x1F441: return "o";  // 👁
+            case 0x1F5D1: return "x";  // 🗑
             case 0x26A0: return "!";   // ⚠
             case 0x26D4: return "!";   // ⛔
             case 0x1F389: return "*";  // 🎉
