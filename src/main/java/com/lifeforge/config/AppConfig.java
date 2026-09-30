@@ -103,12 +103,12 @@ public final class AppConfig {
     private static final String DEFAULT_OLLAMA_MODEL = "llama3.2";
 
     public static String getOllamaBaseUrl() {
-        String url = System.getenv("LIFEFORGE_OLLAMA_URL");
+        String url = envOrProperty("LIFEFORGE_OLLAMA_URL", "lifeforge.ollama.url");
         return (url != null && !url.isBlank()) ? url : DEFAULT_OLLAMA_BASE_URL;
     }
 
     public static String getOllamaModel() {
-        String model = System.getenv("LIFEFORGE_OLLAMA_MODEL");
+        String model = envOrProperty("LIFEFORGE_OLLAMA_MODEL", "lifeforge.ollama.model");
         return (model != null && !model.isBlank()) ? model : DEFAULT_OLLAMA_MODEL;
     }
 }

@@ -47,3 +47,8 @@ bin/
 build/
 .idea/
 *.iml
+
+### Generated Artifacts & Reports ###
+reports/
+*.log
+

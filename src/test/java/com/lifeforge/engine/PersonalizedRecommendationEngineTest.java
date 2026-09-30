@@ -6,10 +6,10 @@ import com.lifeforge.model.*;
 import com.lifeforge.service.*;
 import com.lifeforge.service.CalorieService;
 import com.lifeforge.service.RecommendationPriorityResolver;
-import com.lifeforge.tui4j.LifeForge;
-import com.lifeforge.tui4j.ScreenKit;
-import com.lifeforge.tui4j.ScreenKit.Line;
-import com.lifeforge.tui4j.Theme;
+import com.lifeforge.view.LifeForge;
+import com.lifeforge.view.ScreenKit;
+import com.lifeforge.view.ScreenKit.Line;
+import com.lifeforge.view.Theme;
 import com.lifeforge.util.CalorieCalculator;
 import com.lifeforge.util.HydrationCalculator;
 import com.williamcallahan.tui4j.term.TerminalInfo;
@@ -216,9 +216,9 @@ public class PersonalizedRecommendationEngineTest {
         u90kg.setActivityLevel(ActivityLevel.SEDENTARY);
 
         GoalCompatibilityStatus status90 = GoalCompatibilityStatus.compute(u90kg, gainGoal);
-        assertEquals(GoalCompatibilityStatus.Level.WARNING, status90.getLevel());
+        assertEquals(GoalCompatibilityStatus.Level.CONFLICT, status90.getLevel());
         assertTrue(status90.isWarning());
-        assertEquals("⚠ WARNING", status90.getLevel().getTitle());
+        assertEquals("! GOAL MAY CONFLICT WITH PROFILE", status90.getLevel().getTitle());
         // Verify card rendering
         List<Line> card = status90.renderCard(74);
         assertNotNull(card);
@@ -229,7 +229,7 @@ public class PersonalizedRecommendationEngineTest {
             assertEquals(72, Theme.width(line.text()), "Every card line must be exactly width 72: " + line.text());
         }
 
-        // 20 yrs, 160 cm, 50 kg, Gain Weight -> WELL_ALIGNED
+        // 20 yrs, 160 cm, 50 kg, Gain Weight -> ALIGNED
         User u50kg = new User();
         u50kg.setAge(20);
         u50kg.setGender(Gender.FEMALE);
@@ -238,15 +238,119 @@ public class PersonalizedRecommendationEngineTest {
         u50kg.setActivityLevel(ActivityLevel.SEDENTARY);
 
         GoalCompatibilityStatus status50 = GoalCompatibilityStatus.compute(u50kg, gainGoal);
-        assertEquals(GoalCompatibilityStatus.Level.WELL_ALIGNED, status50.getLevel());
+        assertEquals(GoalCompatibilityStatus.Level.ALIGNED, status50.getLevel());
         assertFalse(status50.isWarning());
-        assertEquals("✓ WELL ALIGNED", status50.getLevel().getTitle());
+        assertEquals("✓ GOAL ALIGNED", status50.getLevel().getTitle());
         assertTrue(status50.getRecommendations().stream().anyMatch(r -> r.contains("gradual weight gain")));
 
-        // 18 yrs, 160 cm, 90 kg, Lose Weight -> WELL_ALIGNED
+        // 18 yrs, 160 cm, 90 kg, Lose Weight -> ALIGNED
         GoalCompatibilityStatus statusLose90 = GoalCompatibilityStatus.compute(u90kg, loseGoal);
-        assertEquals(GoalCompatibilityStatus.Level.WELL_ALIGNED, statusLose90.getLevel());
+        assertEquals(GoalCompatibilityStatus.Level.ALIGNED, statusLose90.getLevel());
         assertFalse(statusLose90.isWarning());
+        assertEquals("✓ GOAL ALIGNED", statusLose90.getLevel().getTitle());
+    }
+
+    @Test
+    public void testUnderweightProfileSelectingLoseWeightReceivesConflictAndAlternativeSuggestions() {
+        // Example: user with BMI 17.3 selecting Lose Weight
+        // 170 cm, 50.0 kg -> BMI = 50 / (1.7 * 1.7) = 17.30
+        User u17_3 = new User();
+        u17_3.setAge(22);
+        u17_3.setGender(Gender.FEMALE);
+        u17_3.setHeightCm(170.0);
+        u17_3.setWeightKg(50.0);
+        u17_3.setActivityLevel(ActivityLevel.LIGHTLY_ACTIVE);
+
+        Goal loseGoal = new Goal(11L, "LOSE_WEIGHT", "Lose Weight", "Calorie deficit", true);
+        GoalCompatibilityStatus status = GoalCompatibilityStatus.compute(u17_3, loseGoal);
+
+        // Status must be CONFLICT
+        assertEquals(GoalCompatibilityStatus.Level.CONFLICT, status.getLevel());
+        assertTrue(status.isWarning());
+        assertEquals("! GOAL MAY CONFLICT WITH PROFILE", status.getLevel().getTitle());
+
+        // Message must explain why goal does not align with profile
+        String msg = status.getStatusMessage();
+        assertTrue(msg.contains("underweight") || msg.contains("17.3"), "Status message must explain underweight context: " + msg);
+
+        // Recommendations must explain why and suggest alternatives
+        List<String> recs = status.getRecommendations();
+        assertTrue(recs.stream().anyMatch(r -> r.contains("Weight loss not recommended") || r.contains("underweight")),
+                "Must explain why weight loss is not recommended: " + recs);
+        assertTrue(recs.stream().anyMatch(r -> r.contains("Gain Weight") || r.contains("Build Muscle") || r.contains("Improve Fitness")),
+                "Must suggest alternative goals: " + recs);
+
+        // Verify card rendering borders
+        List<Line> card = status.renderCard(74);
+        assertNotNull(card);
+        for (Line line : card) {
+            assertEquals(72, Theme.width(line.text()), "Card border alignment must be exact 72: " + line.text());
+        }
+    }
+
+    @Test
+    public void testGoalRequiresCautionForLowerNormalBmi() {
+        // User with lower-normal BMI 19.0 selecting Lose Weight
+        // 180 cm, 61.6 kg -> BMI = 61.6 / (1.8 * 1.8) = 19.01
+        User u19 = new User();
+        u19.setAge(25);
+        u19.setGender(Gender.MALE);
+        u19.setHeightCm(180.0);
+        u19.setWeightKg(61.6);
+        u19.setActivityLevel(ActivityLevel.MODERATELY_ACTIVE);
+
+        Goal loseGoal = new Goal(11L, "LOSE_WEIGHT", "Lose Weight", "Calorie deficit", true);
+        GoalCompatibilityStatus status = GoalCompatibilityStatus.compute(u19, loseGoal);
+
+        assertEquals(GoalCompatibilityStatus.Level.CAUTION, status.getLevel());
+        assertTrue(status.isWarning());
+        assertEquals("⚠ GOAL REQUIRES CAUTION", status.getLevel().getTitle());
+        assertTrue(status.getStatusMessage().contains("19.0") || status.getStatusMessage().contains("underweight threshold"));
+    }
+
+    @Test
+    public void testHealthyProfileSelectingWeightGoalsDoesNotShowWarningSimplyForGoal() {
+        // User with normal BMI 22.0
+        // 175 cm, 67.4 kg -> BMI = 67.4 / (1.75 * 1.75) = 22.01
+        User u22 = new User();
+        u22.setAge(28);
+        u22.setGender(Gender.MALE);
+        u22.setHeightCm(175.0);
+        u22.setWeightKg(67.4);
+        u22.setActivityLevel(ActivityLevel.MODERATELY_ACTIVE);
+
+        Goal loseGoal = new Goal(11L, "LOSE_WEIGHT", "Lose Weight", "Calorie deficit", true);
+        Goal gainGoal = new Goal(10L, "GAIN_WEIGHT", "Gain Weight", "Calorie surplus", true);
+
+        // Neither should show warning simply because it's Lose Weight or Gain Weight
+        GoalCompatibilityStatus loseStatus = GoalCompatibilityStatus.compute(u22, loseGoal);
+        assertEquals(GoalCompatibilityStatus.Level.ALIGNED, loseStatus.getLevel());
+        assertFalse(loseStatus.isWarning());
+        assertEquals("✓ GOAL ALIGNED", loseStatus.getLevel().getTitle());
+
+        GoalCompatibilityStatus gainStatus = GoalCompatibilityStatus.compute(u22, gainGoal);
+        assertEquals(GoalCompatibilityStatus.Level.ALIGNED, gainStatus.getLevel());
+        assertFalse(gainStatus.isWarning());
+        assertEquals("✓ GOAL ALIGNED", gainStatus.getLevel().getTitle());
+    }
+
+    @Test
+    public void testNoTargetAmountAssumedWhenNotProvided() {
+        User user = new User();
+        user.setAge(25);
+        user.setGender(Gender.FEMALE);
+        user.setHeightCm(165.0);
+        user.setWeightKg(60.0);
+        user.setActivityLevel(ActivityLevel.MODERATELY_ACTIVE);
+
+        Goal gainGoal = new Goal(10L, "GAIN_WEIGHT", "Gain Weight", "Calorie surplus", true);
+        GoalCompatibilityStatus status = GoalCompatibilityStatus.compute(user, gainGoal);
+
+        for (String rec : status.getRecommendations()) {
+            assertFalse(rec.contains("kg/week"), "Must not assume target rate like kg/week: " + rec);
+            assertFalse(rec.contains("+0.25"), "Must not assume numeric target: " + rec);
+            assertFalse(rec.contains("+0.5"), "Must not assume numeric target: " + rec);
+        }
     }
 
     @Test
@@ -2187,5 +2291,251 @@ public class PersonalizedRecommendationEngineTest {
         assertFalse(clean.contains("stroke volume"));
         assertFalse(clean.contains("this user"));
         assertFalse(clean.contains("the patient"));
+    }
+
+    @Test
+    public void testAgePersonalizationAcrossAllCategoriesForBuildMuscle() throws SQLException {
+        // 1. Setup two profiles: Age 22 vs Age 55, both Build Muscle + Moderately Active, same height & weight
+        User user22 = new User();
+        user22.setId(22L);
+        user22.setUsername("young_athlete");
+        user22.setAge(22);
+        user22.setGender(Gender.MALE);
+        user22.setHeightCm(178.0);
+        user22.setWeightKg(75.0);
+        user22.setActivityLevel(ActivityLevel.MODERATELY_ACTIVE);
+
+        User user55 = new User();
+        user55.setId(55L);
+        user55.setUsername("mature_athlete");
+        user55.setAge(55);
+        user55.setGender(Gender.MALE);
+        user55.setHeightCm(178.0);
+        user55.setWeightKg(75.0);
+        user55.setActivityLevel(ActivityLevel.MODERATELY_ACTIVE);
+
+        Goal goal = new Goal(1L, "BUILD_MUSCLE", "Build Muscle", "Hypertrophy and strength development", true);
+
+        // Setup top-level categories
+        RecommendationCategory catNutrition = new RecommendationCategory(1L, "Nutrition", "Dietary guidance", null, 1);
+        RecommendationCategory catExercise = new RecommendationCategory(2L, "Exercise", "Physical training", null, 2);
+        RecommendationCategory catSleep = new RecommendationCategory(3L, "Sleep & Recovery", "Rest and sleep", null, 3);
+        RecommendationCategory catHabits = new RecommendationCategory(4L, "Daily Micro-Habits", "Small habits", null, 4);
+        RecommendationCategory catMaster = new RecommendationCategory(5L, "Complete Master Routine", "All-in-one routine", null, 5);
+        RecommendationCategory catHydration = new RecommendationCategory(7L, "Hydration Guidance", "Water intake", null, 7);
+
+        RecommendationCategoryDao fakeCatDao = new RecommendationCategoryDao() {
+            @Override
+            public List<RecommendationCategory> findTopLevel() {
+                return List.of(catNutrition, catExercise, catSleep, catHabits, catMaster, catHydration);
+            }
+            @Override
+            public Optional<RecommendationCategory> findById(Long id) {
+                if (id == 1L) return Optional.of(catNutrition);
+                if (id == 2L) return Optional.of(catExercise);
+                if (id == 3L) return Optional.of(catSleep);
+                if (id == 4L) return Optional.of(catHabits);
+                if (id == 5L) return Optional.of(catMaster);
+                if (id == 7L) return Optional.of(catHydration);
+                return Optional.empty();
+            }
+        };
+
+        RecommendationDao fakeRecDao = new RecommendationDao() {
+            @Override
+            public Optional<Recommendation> findBestMatch(Long goalId, Long categoryId, ActivityLevel activityLevel) {
+                if (categoryId == 1L) {
+                    return Optional.of(new Recommendation(101L, goalId, 1L, activityLevel,
+                            "Protein-Focused Nutrition Plan", "Nutritional guidance",
+                            "Include a strong protein source with each meal; pair with complex carbohydrates.",
+                            "Approximately 500-600 kcal", "3 eggs, Greek yogurt, oats", "Spread protein evenly"));
+                } else if (categoryId == 2L) {
+                    return Optional.of(new Recommendation(102L, goalId, 2L, activityLevel,
+                            "Strength Training Routine", "Physical training",
+                            "Train each major muscle group 2x per week with progressive overload.",
+                            "3-4 strength sessions per week", "Compound lifts (squats, bench, deadlift)", "Form first"));
+                } else if (categoryId == 3L) {
+                    return Optional.of(new Recommendation(103L, goalId, 3L, activityLevel,
+                            "Sleep & Recovery Guidance", "Rest and recovery",
+                            "Ensure adequate sleep and rest days between training the same muscle group.",
+                            "7-9 hours per night", "Dark room, consistent bedtime", "Recovery drives adaptation"));
+                } else if (categoryId == 4L) {
+                    return Optional.of(new Recommendation(104L, goalId, 4L, activityLevel,
+                            "Daily Micro-Habits", "Micro habits",
+                            "Drink a glass of water before meals; prepare workout gear ahead of time.",
+                            "3-4 micro-habits", "Morning water, meal prep", "Consistency matters"));
+                } else if (categoryId == 7L) {
+                    return Optional.of(new Recommendation(105L, goalId, 7L, activityLevel,
+                            "Hydration Guidance", "Water intake",
+                            "Sip water steadily throughout the day rather than large amounts at once.",
+                            "Approximately 2.5-3.0 L/day", "Reusable water bottle", "Drink consistently"));
+                }
+                return Optional.empty();
+            }
+        };
+
+        RecommendationPriorityResolver priorityResolver = new RecommendationPriorityResolver();
+        RecommendationEngine engine = new RecommendationEngine(fakeRecDao, priorityResolver);
+        CalorieService calorieService = new CalorieService();
+        HydrationService hydrationService = new HydrationService();
+        RuleBasedExplanationService explanationService = new RuleBasedExplanationService();
+
+        RecommendationService service = new RecommendationService(
+                engine,
+                fakeCatDao,
+                fakeRecDao,
+                calorieService,
+                hydrationService,
+                explanationService,
+                explanationService
+        );
+
+        // 2. Generate Personalized Plan for both profiles
+        PersonalizedPlanResult plan22 = service.getPersonalizedPlan(user22, goal);
+        PersonalizedPlanResult plan55 = service.getPersonalizedPlan(user55, goal);
+
+        assertNotNull(plan22);
+        assertNotNull(plan55);
+
+        // 3. Verify Personalized Focus Narrative adapts by Age
+        String narrative22 = plan22.getPersonalizedFocus();
+        String narrative55 = plan55.getPersonalizedFocus();
+        assertNotEquals(narrative22, narrative55, "Personalized focus narrative must differ between age 22 and age 55");
+        assertTrue(narrative22.contains("22"), "Age 22 narrative should explicitly calibrate for age 22");
+        assertTrue(narrative22.contains("25–30g") || narrative22.contains("progressive"), "Age 22 narrative reflects progressive training & standard protein feedings");
+        assertTrue(narrative55.contains("55"), "Age 55 narrative should explicitly calibrate for age 55");
+        assertTrue(narrative55.contains("anabolic resistance") || narrative55.contains("joint-friendly"), "Age 55 narrative reflects anabolic resistance / joint preservation");
+
+        // 4. Verify ALL 5 categories are meaningfully personalized while preserving shared core guidance
+        List<PersonalizedPlanResult.AreaItem> areas22 = plan22.getAreas();
+        List<PersonalizedPlanResult.AreaItem> areas55 = plan55.getAreas();
+        assertEquals(areas22.size(), areas55.size());
+
+        for (int i = 0; i < areas22.size(); i++) {
+            PersonalizedPlanResult.AreaItem item22 = areas22.get(i);
+            PersonalizedPlanResult.AreaItem item55 = areas55.get(i);
+            assertEquals(item22.category().getId(), item55.category().getId(), "Categories must align in order");
+
+            Recommendation rec22 = item22.recommendation();
+            Recommendation rec55 = item55.recommendation();
+            assertNotNull(rec22, "Area " + item22.category().getName() + " must have a recommendation for age 22");
+            assertNotNull(rec55, "Area " + item55.category().getName() + " must have a recommendation for age 55");
+
+            long cid = item22.category().getId();
+            String act22 = rec22.getRecommendedActions();
+            String act55 = rec55.getRecommendedActions();
+
+            if (cid == 1L) { // Nutrition
+                // Shared guidance: both prioritize protein and carbohydrates
+                assertTrue(act22.toLowerCase().contains("protein"), "Age 22 nutrition shares protein focus");
+                assertTrue(act55.toLowerCase().contains("protein"), "Age 55 nutrition shares protein focus");
+
+                // Age 22 personalization: 25-30g protein per meal, glycogen replenishment
+                assertTrue(act22.contains("25–30g"), "Age 22 nutrition guides ~25-30g protein per meal for MPS");
+                assertTrue(act22.contains("glycogen"), "Age 22 nutrition highlights glycogen replenishment");
+
+                // Age 55 personalization: 35-40g+ protein to overcome anabolic resistance, joint/bone micros
+                assertTrue(act55.contains("35–40g+"), "Age 55 nutrition guides 35-40g+ protein per meal");
+                assertTrue(act55.contains("anabolic resistance"), "Age 55 nutrition addresses age-related anabolic resistance");
+                assertTrue(act55.contains("calcium") || act55.contains("omega-3"), "Age 55 nutrition supports joint and bone matrix");
+                assertNotEquals(act22, act55, "Nutrition actions must differ between age 22 and 55");
+
+            } else if (cid == 2L) { // Exercise
+                // Shared guidance: both do structured progressive resistance training
+                assertTrue(act22.toLowerCase().contains("progressive overload"), "Age 22 exercise shares progressive overload");
+                assertTrue(act55.toLowerCase().contains("resistance training") || act55.toLowerCase().contains("progressive overload"),
+                        "Age 55 exercise shares resistance training");
+
+                // Age 22 personalization: 6-10 rep range, standard 5-10 min warm-up
+                assertTrue(act22.contains("6–10 rep"), "Age 22 exercise focuses on compound loads in 6-10 rep range");
+                assertTrue(act22.contains("5–10 min"), "Age 22 exercise uses standard 5-10 min dynamic warm-up");
+
+                // Age 55 personalization: 8-15 rep range, controlled 2-3s eccentrics, 10-15 min dynamic joint mobility prep
+                assertTrue(act55.contains("8–15 rep"), "Age 55 exercise focuses on joint-friendly 8-15 rep range");
+                assertTrue(act55.contains("eccentric"), "Age 55 exercise emphasizes controlled eccentric tempo");
+                assertTrue(act55.contains("10–15 min"), "Age 55 exercise emphasizes dedicated 10-15 min joint mobility prep");
+                assertNotEquals(act22, act55, "Exercise actions must differ between age 22 and 55");
+
+            } else if (cid == 3L) { // Sleep & Recovery
+                // Shared guidance: both aim for restorative sleep and consistent rest
+                assertTrue(act22.toLowerCase().contains("sleep"), "Age 22 shares sleep guidance");
+                assertTrue(act55.toLowerCase().contains("sleep"), "Age 55 shares sleep guidance");
+
+                // Age 22 personalization: natural deep-sleep growth hormone pulses, 48-hour recovery window
+                assertTrue(act22.contains("growth hormone") || act22.contains("48-hour recovery"), "Age 22 sleep emphasizes natural nocturnal GH & 48h window");
+
+                // Age 55 personalization: 48-72 hours recovery between sessions for tendon repair, 45-60 min evening wind-down
+                assertTrue(act55.contains("48–72 hours"), "Age 55 sleep emphasizes 48-72h recovery for connective tissue repair");
+                assertTrue(act55.contains("wind-down"), "Age 55 sleep emphasizes calming evening wind-down");
+                assertNotEquals(act22, act55, "Sleep actions must differ between age 22 and 55");
+
+            } else if (cid == 4L) { // Daily Micro-Habits
+                // Age 22 personalization: portable high-protein snacks, gym gear staging, post-meal walk
+                assertTrue(act22.contains("portable high-protein snacks") || act22.contains("workout gear"), "Age 22 habits suit active young adult routine");
+                assertTrue(act22.contains("screen curfew"), "Age 22 habits include digital screen curfew");
+
+                // Age 55 personalization: 5-minute morning mobility routine, scheduled desk water, post-workout decompression
+                assertTrue(act55.contains("morning mobility routine"), "Age 55 habits include 5-min morning joint mobility");
+                assertTrue(act55.contains("scheduled hourly"), "Age 55 habits include scheduled desk water reminders");
+                assertTrue(act55.contains("spinal decompression"), "Age 55 habits include gentle spinal decompression");
+                assertNotEquals(act22, act55, "Micro-habit actions must differ between age 22 and 55");
+
+            } else if (cid == 7L) { // Hydration Guidance
+                // Shared guidance: both sip water steadily throughout active hours
+                assertTrue(act22.toLowerCase().contains("water") || act22.toLowerCase().contains("hydrat"), "Age 22 shares hydration");
+                assertTrue(act55.toLowerCase().contains("water") || act55.toLowerCase().contains("hydrat"), "Age 55 shares hydration");
+
+                // Age 22 personalization: workout hydration, sweat replacement, cellular volumization
+                assertTrue(act22.contains("workout sessions") || act22.contains("sweat losses"), "Age 22 hydration emphasizes training fluid replacement");
+
+                // Age 55 personalization: clock-based schedule (diminishing thirst cues), joint lubrication, evening fluid taper
+                assertTrue(act55.contains("clock-based") || act55.contains("thirst cues naturally decline"), "Age 55 hydration addresses blunted thirst cues");
+                assertTrue(act55.contains("taper fluids"), "Age 55 hydration includes pre-bed fluid tapering to protect sleep");
+                assertNotEquals(act22, act55, "Hydration actions must differ between age 22 and 55");
+
+            } else if (cid == 5L) { // Complete Master Routine
+                // Master routine combines all 5 pillars and must reflect age-personalized guidance
+                assertTrue(act22.contains("🍎 Nutrition:"));
+                assertTrue(act22.contains("🏋 Exercise:"));
+                assertTrue(act22.contains("💧 Hydration:"));
+                assertTrue(act22.contains("😴 Sleep & Recovery:"));
+                assertTrue(act22.contains("🌱 Daily Micro-Habits:"));
+
+                assertTrue(act55.contains("🍎 Nutrition:"));
+                assertTrue(act55.contains("🏋 Exercise:"));
+                assertTrue(act55.contains("💧 Hydration:"));
+                assertTrue(act55.contains("😴 Sleep & Recovery:"));
+                assertTrue(act55.contains("🌱 Daily Micro-Habits:"));
+
+                assertTrue(rec22.getDescription().contains("22"), "Master routine description reflects age 22");
+                assertTrue(rec55.getDescription().contains("55"), "Master routine description reflects age 55");
+                assertNotEquals(act22, act55, "Master Routine combined actions must differ between age 22 and 55");
+            }
+        }
+
+        // 5. Verify Daily Blueprint also adapts by Age
+        DailyBlueprint bp22 = engine.buildDailyBlueprint(user22, goal);
+        DailyBlueprint bp55 = engine.buildDailyBlueprint(user55, goal);
+
+        assertNotNull(bp22);
+        assertNotNull(bp55);
+
+        // Morning
+        String morning22 = bp22.getMorning().stream().map(DailyBlueprint.BlueprintItem::guidance).reduce("", (a, b) -> a + " " + b);
+        String morning55 = bp55.getMorning().stream().map(DailyBlueprint.BlueprintItem::guidance).reduce("", (a, b) -> a + " " + b);
+        assertTrue(morning22.contains("25–30g") || morning22.contains("glycogen"), "Age 22 morning blueprint emphasizes training glycogen and 25-30g protein");
+        assertTrue(morning55.contains("35–40g+") || morning55.contains("spinal decompression"), "Age 55 morning blueprint emphasizes joint mobility and 35-40g+ protein");
+
+        // Midday
+        String midday22 = bp22.getMidday().stream().map(DailyBlueprint.BlueprintItem::guidance).reduce("", (a, b) -> a + " " + b);
+        String midday55 = bp55.getMidday().stream().map(DailyBlueprint.BlueprintItem::guidance).reduce("", (a, b) -> a + " " + b);
+        assertTrue(midday22.contains("progressive overload") || midday22.contains("6–10 rep"), "Age 22 midday blueprint emphasizes progressive overload");
+        assertTrue(midday55.contains("joint-friendly") || midday55.contains("controlled eccentrics"), "Age 55 midday blueprint emphasizes joint-friendly controlled eccentrics");
+
+        // Evening
+        String evening22 = bp22.getEvening().stream().map(DailyBlueprint.BlueprintItem::guidance).reduce("", (a, b) -> a + " " + b);
+        String evening55 = bp55.getEvening().stream().map(DailyBlueprint.BlueprintItem::guidance).reduce("", (a, b) -> a + " " + b);
+        assertTrue(evening22.contains("screen curfew") || evening22.contains("growth hormone"), "Age 22 evening blueprint emphasizes screen curfew and natural GH");
+        assertTrue(evening55.contains("48–72 hours") || evening55.contains("taper large liquid"), "Age 55 evening blueprint emphasizes 48-72h recovery and fluid taper");
     }
 }

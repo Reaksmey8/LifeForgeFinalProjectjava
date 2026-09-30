@@ -77,14 +77,8 @@ public class CalculationTrace {
 
         // Hydration via HydrationCalculator
         this.hydrationFormula = "Hydration = (Weight × 33.0 mL/kg) + Activity Bonus";
-        this.hydrationBaseMl = weight * 33.0;
-        this.hydrationBonusMl = switch (activity) {
-            case SEDENTARY -> 0;
-            case LIGHTLY_ACTIVE -> 250;
-            case MODERATELY_ACTIVE -> 500;
-            case VERY_ACTIVE -> 750;
-            case EXTRA_ACTIVE -> 1000;
-        };
+        this.hydrationBaseMl = HydrationCalculator.baseMl(weight);
+        this.hydrationBonusMl = HydrationCalculator.activityBonusMl(activity);
         this.hydrationTotalMl = hydrationBaseMl + hydrationBonusMl;
         this.hydrationLiters = HydrationCalculator.suggestedLitersPerDay(weight, activity);
     }

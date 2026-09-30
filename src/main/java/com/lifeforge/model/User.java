@@ -125,12 +125,19 @@ public class User {
         this.weightKg = weightKg;
     }
 
-    public Double getBmi() {
-        if (heightCm == null || weightKg == null || heightCm <= 0 || weightKg <= 0) {
+    public static double calculateBmi(double weightKg, double heightCm) {
+        if (heightCm <= 0 || weightKg <= 0) {
             return 0.0;
         }
         double hM = heightCm / 100.0;
         return weightKg / (hM * hM);
+    }
+
+    public Double getBmi() {
+        if (heightCm == null || weightKg == null) {
+            return 0.0;
+        }
+        return calculateBmi(weightKg, heightCm);
     }
 
     public ActivityLevel getActivityLevel() {

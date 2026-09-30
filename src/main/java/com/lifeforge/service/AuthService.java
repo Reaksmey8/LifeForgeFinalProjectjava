@@ -67,23 +67,35 @@ public class AuthService {
         }
     }
 
-    public RegistrationResult register(String fullName, String email, String password,
+    public RegistrationResult register(String username, String email, String password,
                                        String confirmPassword, Integer age, Gender gender,
                                        Double heightCm, Double weightKg, ActivityLevel activityLevel) {
-        String error = validateRegistration(fullName, email, password, confirmPassword, age, heightCm, weightKg);
+        return register(username, username, email, password, confirmPassword, age, gender, heightCm, weightKg, activityLevel);
+    }
+
+    public RegistrationResult register(String username, String fullName, String email, String password,
+                                       String confirmPassword, Integer age, Gender gender,
+                                       Double heightCm, Double weightKg, ActivityLevel activityLevel) {
+        String error = validateRegistration(username, email, password, confirmPassword, age, heightCm, weightKg);
         if (error != null) {
             return RegistrationResult.fail(error);
         }
 
         try {
+            String trimmedUsername = username.trim();
+            if (userDao.usernameExists(trimmedUsername)) {
+                return RegistrationResult.fail("An account with this username already exists.");
+            }
+
             String normalizedEmail = email.trim().toLowerCase();
             if (userDao.emailExists(normalizedEmail)) {
                 return RegistrationResult.fail("An account with this email already exists.");
             }
 
             User user = new User();
-            user.setFullName(fullName.trim());
-            user.setUsername(uniqueUsername(normalizedEmail));
+            user.setUsername(trimmedUsername);
+            String resolvedFullName = (fullName != null && !fullName.isBlank()) ? fullName.trim() : trimmedUsername;
+            user.setFullName(resolvedFullName);
             user.setEmail(normalizedEmail);
             user.setPasswordHash(PasswordUtil.hash(password));
             user.setAge(age);
@@ -131,10 +143,10 @@ public class AuthService {
         return base + System.nanoTime();
     }
 
-    private String validateRegistration(String fullName, String email, String password,
+    private String validateRegistration(String username, String email, String password,
                                         String confirmPassword, Integer age, Double heightCm, Double weightKg) {
         String[] checks = {
-                ValidationUtil.validateFullName(fullName),
+                ValidationUtil.validateUsername(username),
                 ValidationUtil.validateEmail(email),
                 ValidationUtil.validatePassword(password),
                 ValidationUtil.validatePasswordConfirmation(password, confirmPassword),

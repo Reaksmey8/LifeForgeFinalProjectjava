@@ -107,6 +107,9 @@ public class RecommendationService {
                 if (catName.contains("habit") || catName.contains("micro")) {
                     Recommendation habRec = buildStandaloneHabitRecommendation(user, goal, catOpt.get());
                     baseRecommendation = Optional.of(habRec);
+                } else if (catName.contains("hydration")) {
+                    Recommendation hydRec = buildStandaloneHydrationRecommendation(user, goal, catOpt.get());
+                    baseRecommendation = Optional.of(hydRec);
                 }
             }
         }
@@ -175,9 +178,15 @@ public class RecommendationService {
             Optional<Recommendation> recOpt = recommendationEngine.generateBaseRecommendation(
                     user, goal, cat.getId());
 
-            if (recOpt.isEmpty() && isMasterRoutineCategory(cat)) {
-                RecommendationResult mr = buildMasterRoutineResult(user, goal, cat);
-                recOpt = Optional.of(mr.recommendation);
+            if (recOpt.isEmpty()) {
+                if (isMasterRoutineCategory(cat)) {
+                    RecommendationResult mr = buildMasterRoutineResult(user, goal, cat);
+                    recOpt = Optional.of(mr.recommendation);
+                } else if (nameLower.contains("habit") || nameLower.contains("micro")) {
+                    recOpt = Optional.of(buildStandaloneHabitRecommendation(user, goal, cat));
+                } else if (nameLower.contains("hydration")) {
+                    recOpt = Optional.of(buildStandaloneHydrationRecommendation(user, goal, cat));
+                }
             }
 
             areaItems.add(new PersonalizedPlanResult.AreaItem(
@@ -378,12 +387,24 @@ public class RecommendationService {
         String goalCode = goal != null && goal.getCode() != null ? goal.getCode().toUpperCase(java.util.Locale.ROOT) : "";
         ActivityLevel actLevel = user != null && user.getActivityLevel() != null ? user.getActivityLevel() : ActivityLevel.SEDENTARY;
 
+        int age = (user != null && user.getAge() != null && user.getAge() > 0) ? user.getAge() : 30;
+
         // Fallback pillar actions if no specific row in DB
         String nutFallback;
         if (goalCode.contains("MUSCLE")) {
-            nutFallback = "Include a protein-rich food source with each meal paired with complex carbohydrates for muscle synthesis.";
+            if (age >= 50) {
+                nutFallback = "Aim for 35–40g+ protein per meal to overcome age-related anabolic resistance and stimulate muscle protein synthesis; incorporate calcium, vitamin D, and omega-3s for bone and joint support.";
+            } else if (age < 35) {
+                nutFallback = "Include ~25–30g high-quality protein per meal paired with complex carbohydrates for muscle protein synthesis and training glycogen.";
+            } else {
+                nutFallback = "Include a protein-rich food source with each meal paired with complex carbohydrates for muscle synthesis.";
+            }
         } else if (goalCode.contains("WEIGHT")) {
-            nutFallback = "Prioritize lean protein and abundant dietary fiber with balanced portions; minimize added sugars.";
+            if (age >= 50) {
+                nutFallback = "Prioritize lean protein (25–30g+/meal) to protect lean muscle mass; incorporate abundant dietary fiber, calcium, and vitamin D.";
+            } else {
+                nutFallback = "Prioritize lean protein and abundant dietary fiber with balanced portions; minimize added sugars.";
+            }
         } else if (goalCode.contains("SKIN")) {
             nutFallback = "Emphasize antioxidant-rich produce, healthy fats, and hydrating whole foods.";
         } else {
@@ -391,16 +412,41 @@ public class RecommendationService {
         }
 
         String exeFallback;
-        if (actLevel == ActivityLevel.SEDENTARY) {
-            exeFallback = "Start with brisk 20–30 minute walks 4–5 times per week; add light bodyweight mobility routines.";
-        } else if (actLevel == ActivityLevel.VERY_ACTIVE || actLevel == ActivityLevel.EXTRA_ACTIVE) {
-            exeFallback = "Execute structured high-performance training with progressive overload and planned recovery days.";
+        if (goalCode.contains("MUSCLE")) {
+            if (age >= 50) {
+                exeFallback = "Prioritize joint-friendly resistance training in the 8–15 rep range with controlled 2–3s eccentrics; include 10–15 min dedicated mobility prep.";
+            } else if (age < 35) {
+                exeFallback = "Execute structured progressive resistance training (6–10 rep range) with weekly overload and standard warm-up.";
+            } else {
+                exeFallback = "Maintain 3–4 weekly training sessions balancing strength development and cardiovascular conditioning.";
+            }
         } else {
-            exeFallback = "Maintain 3–4 weekly training sessions balancing strength development and cardiovascular conditioning.";
+            if (actLevel == ActivityLevel.SEDENTARY) {
+                exeFallback = "Start with brisk 20–30 minute walks 4–5 times per week; add light bodyweight mobility routines.";
+            } else if (actLevel == ActivityLevel.VERY_ACTIVE || actLevel == ActivityLevel.EXTRA_ACTIVE) {
+                exeFallback = "Execute structured high-performance training with progressive overload and planned recovery days.";
+            } else {
+                exeFallback = "Maintain 3–4 weekly training sessions balancing strength development and cardiovascular conditioning.";
+            }
         }
 
-        String hydFallback = String.format("Sip water consistently throughout the day (target ~%.1f L/day) to support cellular health.", hydrationLiters);
-        String slpFallback = "Aim for 7–9 hours of quality sleep nightly; maintain consistent sleep/wake times and dim lights before bed.";
+        String hydFallback;
+        if (age >= 50) {
+            hydFallback = String.format(java.util.Locale.ROOT, "Follow a proactive, clock-based hydration schedule (~%.1f L/day) to lubricate joints; taper fluids 2 hours before bed for undisturbed sleep.", hydrationLiters);
+        } else if (age < 35) {
+            hydFallback = String.format(java.util.Locale.ROOT, "Hydrate actively throughout the day and around training (~%.1f L/day) to sustain muscular fullness and cellular volumization.", hydrationLiters);
+        } else {
+            hydFallback = String.format(java.util.Locale.ROOT, "Sip water consistently throughout the day (target ~%.1f L/day) to support cellular health.", hydrationLiters);
+        }
+
+        String slpFallback;
+        if (age >= 50) {
+            slpFallback = "Aim for 7–8.5 hours of sleep nightly with 48–72h recovery between intense sessions; establish a relaxing 45–60 min evening wind-down.";
+        } else if (age < 35) {
+            slpFallback = "Aim for 7–9 hours of sleep nightly to capitalize on natural growth hormone recovery; allow 48 hours between training the same muscle group.";
+        } else {
+            slpFallback = "Aim for 7–9 hours of quality sleep nightly; maintain consistent sleep/wake times and dim lights before bed.";
+        }
 
         String nutritionText = nutRec.map(this::extractPillarAction).orElse(nutFallback);
         String exerciseText = exeRec.map(this::extractPillarAction).orElse(exeFallback);
@@ -408,7 +454,7 @@ public class RecommendationService {
         String sleepText = slpRec.map(this::extractPillarAction).orElse(slpFallback);
         String habitText = habRec.isPresent()
                 ? extractPillarAction(habRec.get())
-                : buildDailyMicroHabitsActions(goal, actLevel);
+                : buildDailyMicroHabitsActions(user, goal, actLevel);
 
         StringBuilder combinedActions = new StringBuilder();
         combinedActions.append("🍎 Nutrition:\n");
@@ -427,7 +473,7 @@ public class RecommendationService {
 
         String title = "Complete Master Routine (" + goalName + ")";
         String description = "A unified daily routine combining nutrition, exercise, hydration, sleep, and micro-habits "
-                + "specifically calibrated for " + goalName + " and " + actName + " activity level.";
+                + "specifically calibrated for " + goalName + ", " + actName + " activity level, and age " + age + ".";
 
         StringBuilder targetSummary = new StringBuilder();
         if (calorieRelevant && calorieSummary != null) {
@@ -498,34 +544,44 @@ public class RecommendationService {
     }
 
     public String buildDailyMicroHabitsActions(Goal goal, ActivityLevel actLevel) {
+        return buildDailyMicroHabitsActions(null, goal, actLevel);
+    }
+
+    public String buildDailyMicroHabitsActions(User user, Goal goal, ActivityLevel actLevel) {
         String goalCode = goal != null && goal.getCode() != null
                 ? goal.getCode().toUpperCase(java.util.Locale.ROOT)
                 : "";
         ActivityLevel level = actLevel != null ? actLevel : ActivityLevel.SEDENTARY;
+        int age = (user != null && user.getAge() != null && user.getAge() > 0) ? user.getAge() : 30;
 
         if (goalCode.contains("MUSCLE")) {
-            if (level == ActivityLevel.VERY_ACTIVE || level == ActivityLevel.EXTRA_ACTIVE) {
-                return "• Prepare a high-protein meal or shake ahead of time.\n"
-                        + "• Prepare workout gear and recovery items before training.\n"
-                        + "• Keep water or electrolytes available during intense sessions.\n"
-                        + "• Start an evening wind-down at a consistent time for muscle recovery.";
-            } else if (level == ActivityLevel.SEDENTARY) {
-                return "• Prepare a protein-rich meal or snack ahead of time.\n"
-                        + "• Set out workout essentials before planned training.\n"
-                        + "• Keep water available at your desk during the day.\n"
-                        + "• Start an evening wind-down at a consistent time.";
+            if (age >= 50) {
+                return "• Complete a 5-minute morning mobility routine to lubricate joints and spine.\n"
+                        + "• Keep a water bottle at your workspace and sip on a scheduled hourly basis.\n"
+                        + "• Spend 5–10 minutes on gentle spinal decompression or stretching after training.\n"
+                        + "• Dim overhead lights 60 minutes before bed and taper liquids for uninterrupted sleep.";
+            } else if (age < 35) {
+                return "• Prepare portable high-protein snacks or shakes ahead of time.\n"
+                        + "• Stage workout gear and water bottle the night before for friction-free training.\n"
+                        + "• Take a brisk 10-minute walk after your largest meal to support glucose disposal.\n"
+                        + "• Set a digital screen curfew 45 minutes before sleep to protect sleep onset.";
             } else {
-                return "• Prepare a protein-rich meal ahead of time.\n"
-                        + "• Prepare workout essentials before training.\n"
-                        + "• Keep water available during the day.\n"
-                        + "• Start an evening wind-down at a consistent time.";
+                return "• Pre-portion high-protein meals or snacks to avoid impulsive eating.\n"
+                        + "• Take a 5-minute movement break every 90 minutes of desk work.\n"
+                        + "• Hydrate with a full glass of water upon waking and before each meal.\n"
+                        + "• Dim screens 45 minutes before bed to initiate sleep prep.";
             }
         } else if (goalCode.contains("WEIGHT")) {
-            if (level == ActivityLevel.SEDENTARY) {
+            if (age >= 50) {
+                return "• Complete a 5-minute morning joint mobility routine upon waking.\n"
+                        + "• Drink a glass of water before each main meal and keep hourly hydration prompts.\n"
+                        + "• Take a gentle 10-minute post-meal walk for blood glucose regulation.\n"
+                        + "• Taper liquids and dim overhead lights 60 minutes before bedtime.";
+            } else if (age < 35) {
                 return "• Drink a glass of water before each main meal.\n"
-                        + "• Take a short 5-minute walking break every 1–2 hours.\n"
-                        + "• Portion out wholesome snacks in advance.\n"
-                        + "• Set a screen-free alarm 45 minutes before bedtime.";
+                        + "• Prepare high-fiber, low-calorie snacks in advance.\n"
+                        + "• Take a 10-minute brisk walk after lunch or dinner.\n"
+                        + "• Set a screen-free alarm 45 minutes before bed.";
             } else {
                 return "• Drink a glass of water before each main meal.\n"
                         + "• Prepare high-fiber, low-calorie snacks in advance.\n"
@@ -564,7 +620,17 @@ public class RecommendationService {
     private Recommendation buildStandaloneHabitRecommendation(User user, Goal goal, RecommendationCategory category) {
         ActivityLevel actLevel = user != null && user.getActivityLevel() != null ? user.getActivityLevel() : ActivityLevel.SEDENTARY;
         String goalName = goal != null ? goal.getName() : "Daily Wellness";
-        String actions = buildDailyMicroHabitsActions(goal, actLevel);
+        String actions = buildDailyMicroHabitsActions(user, goal, actLevel);
+        int age = (user != null && user.getAge() != null && user.getAge() > 0) ? user.getAge() : 30;
+
+        String notes;
+        if (age >= 50) {
+            notes = "At age " + age + ", daily mobility and scheduled hydration habits safeguard joint health, spinal alignment, and restorative sleep.";
+        } else if (age < 35) {
+            notes = "At age " + age + ", low-friction habit triggers help maintain nutritional and training consistency around a dynamic schedule.";
+        } else {
+            notes = "These daily micro-habits are practical guidance to support your main recommendation, not a completion checklist.";
+        }
 
         try {
             return recommendationDao.findOrCreateDynamicRecommendation(
@@ -572,11 +638,11 @@ public class RecommendationService {
                     category.getId(),
                     actLevel,
                     "Daily Micro-Habits (" + goalName + ")",
-                    "Small, practical daily actions calibrated for " + goalName + " and your activity level.",
+                    "Small, practical daily actions calibrated for " + goalName + ", your activity level, and age " + age + ".",
                     actions,
                     "3–4 daily micro-actions",
                     "Meal prep ahead of time, evening wind-down routine",
-                    "These daily micro-habits are practical guidance to support your main recommendation, not a completion checklist."
+                    notes
             );
         } catch (Exception e) {
             return new Recommendation(
@@ -585,11 +651,60 @@ public class RecommendationService {
                     category.getId(),
                     actLevel,
                     "Daily Micro-Habits (" + goalName + ")",
-                    "Small, practical daily actions calibrated for " + goalName + " and your activity level.",
+                    "Small, practical daily actions calibrated for " + goalName + ", your activity level, and age " + age + ".",
                     actions,
                     "3–4 daily micro-actions",
                     "Meal prep ahead of time, evening wind-down routine",
-                    "These daily micro-habits are practical guidance to support your main recommendation, not a completion checklist."
+                    notes
+            );
+        }
+    }
+
+    private Recommendation buildStandaloneHydrationRecommendation(User user, Goal goal, RecommendationCategory category) {
+        ActivityLevel actLevel = user != null && user.getActivityLevel() != null ? user.getActivityLevel() : ActivityLevel.SEDENTARY;
+        String goalName = goal != null ? goal.getName() : "Daily Wellness";
+        double hydrationLiters = hydrationService.suggestedLitersPerDay(user);
+        int age = (user != null && user.getAge() != null && user.getAge() > 0) ? user.getAge() : 30;
+
+        String action;
+        String notes;
+        if (age >= 50) {
+            action = String.format(java.util.Locale.ROOT, "Follow a proactive, clock-based hydration schedule (~%.1f L/day) rather than waiting for thirst (thirst cues naturally decline with age); drink steadily during daytime hours to lubricate joints and spinal discs, and taper fluids 2 hours before bed for undisturbed sleep.", hydrationLiters);
+            notes = "At age " + age + ", thirst sensation is naturally blunted, so drink on a proactive schedule. Steady daytime hydration cushions joints and spinal discs, while evening tapering protects deep sleep.";
+        } else if (age < 35) {
+            action = String.format(java.util.Locale.ROOT, "Hydrate actively around workout sessions (~%.1f L/day, drinking 400–500 mL pre-workout and sipping during training); replace sweat losses promptly to sustain muscular strength, cell volumization, and workout stamina.", hydrationLiters);
+            notes = "At age " + age + ", maintaining cellular hydration directly supports muscle fullness and workout power output. Drink readily to satisfy exercise-induced fluid losses.";
+        } else {
+            action = String.format(java.util.Locale.ROOT, "Sip water consistently throughout active hours (target ~%.1f L/day) to maintain cellular hydration, joint lubrication, and cognitive focus.", hydrationLiters);
+            notes = "Distribute fluid intake evenly across the day and increase during periods of heat or elevated activity.";
+        }
+
+        String target = String.format(java.util.Locale.ROOT, "Approximately %.1f–%.1f L/day depending on activity", hydrationLiters, hydrationLiters + 0.5);
+
+        try {
+            return recommendationDao.findOrCreateDynamicRecommendation(
+                    goal != null ? goal.getId() : 1L,
+                    category.getId(),
+                    actLevel,
+                    "Hydration Guidance (" + goalName + ")",
+                    "Targeted daily water intake guidance calibrated for " + goalName + ", your activity level, and age " + age + ".",
+                    action,
+                    target,
+                    "• Morning: 500 mL upon waking\n• Daytime: 250–300 mL per active hour\n• Evening: Taper fluid intake before sleep",
+                    notes
+            );
+        } catch (Exception e) {
+            return new Recommendation(
+                    -1L,
+                    goal != null ? goal.getId() : null,
+                    category.getId(),
+                    actLevel,
+                    "Hydration Guidance (" + goalName + ")",
+                    "Targeted daily water intake guidance calibrated for " + goalName + ", your activity level, and age " + age + ".",
+                    action,
+                    target,
+                    "• Morning: 500 mL upon waking\n• Daytime: 250–300 mL per active hour\n• Evening: Taper fluid intake before sleep",
+                    notes
             );
         }
     }

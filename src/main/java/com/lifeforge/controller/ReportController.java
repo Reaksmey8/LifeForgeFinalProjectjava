@@ -39,6 +39,33 @@ public class ReportController extends BaseController {
         return export(user, goal, outputFile, false);
     }
 
+    public boolean exportSavedRecommendationsPdf(User user, int savedCount, Path outputFile) {
+        try {
+            if (outputFile.getParent() != null && !Files.exists(outputFile.getParent())) {
+                Files.createDirectories(outputFile.getParent());
+            }
+            jasperReportsService.exportSavedRecommendationsToPdf(user, savedCount, outputFile);
+            return true;
+        } catch (SQLException | JRException | IOException e) {
+            setError(e, "Saved recommendations export failed.");
+            return false;
+        }
+    }
+
+    public Path defaultHealthReportPath(User user) {
+        String safeName = (user != null && user.getUsername() != null && !user.getUsername().isBlank())
+                ? user.getUsername().replaceAll("[^a-zA-Z0-9_-]", "")
+                : "user";
+        return Path.of("reports", "LifeForge_Health_Report_" + safeName + ".pdf");
+    }
+
+    public Path defaultSavedRecommendationsPath(User user) {
+        String safeName = (user != null && user.getUsername() != null && !user.getUsername().isBlank())
+                ? user.getUsername().replaceAll("[^a-zA-Z0-9_-]", "")
+                : "user";
+        return Path.of("reports", "LifeForge_Saved_Recommendations_" + safeName + ".pdf");
+    }
+
     private boolean export(User user, Goal goal, Path outputFile, boolean asPdf) {
         try {
             if (outputFile.getParent() != null && !Files.exists(outputFile.getParent())) {
@@ -59,6 +86,9 @@ public class ReportController extends BaseController {
 
     private List<Recommendation> recommendationsForGoal(Goal goal) throws SQLException {
         List<Recommendation> relevant = new ArrayList<>();
+        if (goal == null || goal.getId() == null) {
+            return relevant;
+        }
         for (Recommendation recommendation : recommendationService.listAllRecommendations()) {
             if (goal.getId().equals(recommendation.getGoalId())) {
                 relevant.add(recommendation);

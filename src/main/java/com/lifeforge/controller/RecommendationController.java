@@ -36,6 +36,9 @@ public class RecommendationController extends BaseController {
             setError("Not logged in.");
             return Optional.empty();
         }
+        if (session.getCustomGoal() != null) {
+            return Optional.of(session.getCustomGoal());
+        }
         try {
             return goalService.getCurrentGoalForUser(current.getId());
         } catch (SQLException e) {

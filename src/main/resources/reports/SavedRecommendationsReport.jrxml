@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jasperReport xmlns="http://jasperreports.sourceforge.net/jasperreports"
+              xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+              xsi:schemaLocation="http://jasperreports.sourceforge.net/jasperreports http://jasperreports.sourceforge.net/xsd/jasperreport.xsd"
+              name="SavedRecommendationsReport"
+              pageWidth="595"
+              pageHeight="842"
+              columnWidth="535"
+              leftMargin="30"
+              rightMargin="30"
+              topMargin="30"
+              bottomMargin="30"
+              whenNoDataType="AllSectionsNoDetail"
+              uuid="d8e9f0a1-b2c3-4d5e-6f7a-8b9c0d1e2f3a">
+
+    <parameter name="fullName" class="java.lang.String"/>
+    <parameter name="email" class="java.lang.String"/>
+    <parameter name="savedCount" class="java.lang.Integer"/>
+
+    <title>
+        <band height="90" splitType="Stretch">
+            <rectangle radius="6">
+                <reportElement mode="Opaque" x="0" y="0" width="535" height="75" backcolor="#0F766E"/>
+                <graphicElement><pen lineWidth="0.0"/></graphicElement>
+            </rectangle>
+            <staticText>
+                <reportElement x="20" y="12" width="350" height="28" forecolor="#FFFFFF"/>
+                <textElement verticalAlignment="Middle">
+                    <font fontName="SansSerif" size="20" isBold="true"/>
+                </textElement>
+                <text><![CDATA[SAVED RECOMMENDATIONS]]></text>
+            </staticText>
+            <staticText>
+                <reportElement x="20" y="42" width="350" height="18" forecolor="#CCFBF1"/>
+                <textElement verticalAlignment="Middle">
+                    <font fontName="SansSerif" size="10" isItalic="true"/>
+                </textElement>
+                <text><![CDATA[Bookmarked Health Guidance & Prescribed Actions]]></text>
+            </staticText>
+            <textField pattern="yyyy-MM-dd">
+                <reportElement x="375" y="26" width="140" height="20" forecolor="#F0FDFA"/>
+                <textElement textAlignment="Right" verticalAlignment="Middle">
+                    <font fontName="SansSerif" size="9"/>
+                </textElement>
+                <textFieldExpression><![CDATA["Exported: " + new java.text.SimpleDateFormat("yyyy-MM-dd").format(new java.util.Date())]]></textFieldExpression>
+            </textField>
+        </band>
+    </title>
+
+    <pageHeader>
+        <band height="80" splitType="Stretch">
+            <rectangle radius="4">
+                <reportElement mode="Opaque" x="0" y="0" width="535" height="65" backcolor="#F8FAFC"/>
+                <graphicElement><pen lineWidth="1.0" lineColor="#CBD5E1"/></graphicElement>
+            </rectangle>
+            <staticText>
+                <reportElement x="15" y="12" width="60" height="16" forecolor="#64748B"/>
+                <textElement verticalAlignment="Middle"><font fontName="SansSerif" size="9" isBold="true"/></textElement>
+                <text><![CDATA[User:]]></text>
+            </staticText>
+            <textField>
+                <reportElement x="75" y="12" width="200" height="16" forecolor="#0F172A"/>
+                <textElement verticalAlignment="Middle"><font fontName="SansSerif" size="9" isBold="true"/></textElement>
+                <textFieldExpression><![CDATA[$P{fullName} != null ? $P{fullName} : "User"]]></textFieldExpression>
+            </textField>
+
+            <staticText>
+                <reportElement x="15" y="34" width="60" height="16" forecolor="#64748B"/>
+                <textElement verticalAlignment="Middle"><font fontName="SansSerif" size="9" isBold="true"/></textElement>
+                <text><![CDATA[Email:]]></text>
+            </staticText>
+            <textField>
+                <reportElement x="75" y="34" width="200" height="16" forecolor="#0F172A"/>
+                <textElement verticalAlignment="Middle"><font fontName="SansSerif" size="9"/></textElement>
+                <textFieldExpression><![CDATA[$P{email} != null ? $P{email} : "N/A"]]></textFieldExpression>
+            </textField>
+
+            <staticText>
+                <reportElement x="310" y="22" width="130" height="16" forecolor="#64748B"/>
+                <textElement verticalAlignment="Middle"><font fontName="SansSerif" size="9" isBold="true"/></textElement>
+                <text><![CDATA[Total Bookmarks:]]></text>
+            </staticText>
+            <textField>
+                <reportElement x="440" y="22" width="75" height="16" forecolor="#0F766E"/>
+                <textElement verticalAlignment="Middle"><font fontName="SansSerif" size="11" isBold="true"/></textElement>
+                <textFieldExpression><![CDATA[$P{savedCount} != null ? $P{savedCount} : 0]]></textFieldExpression>
+            </textField>
+        </band>
+    </pageHeader>
+
+    <summary>
+        <band height="120" splitType="Stretch">
+            <rectangle radius="4">
+                <reportElement mode="Opaque" x="0" y="10" width="535" height="60" backcolor="#F0FDFA"/>
+                <graphicElement><pen lineWidth="1.0" lineColor="#99F6E4"/></graphicElement>
+            </rectangle>
+            <staticText>
+                <reportElement x="15" y="18" width="505" height="40" forecolor="#115E59"/>
+                <textElement><font fontName="SansSerif" size="9"/></textElement>
+                <text><![CDATA[These saved recommendations are retrieved from your active LifeForge personal bookmarks. Review these daily to maintain habit consistency and reach your desired wellness milestones.]]></text>
+            </staticText>
+
+            <line>
+                <reportElement x="0" y="90" width="535" height="1" forecolor="#E2E8F0"/>
+            </line>
+            <staticText>
+                <reportElement x="0" y="98" width="300" height="16" forecolor="#94A3B8"/>
+                <textElement verticalAlignment="Middle"><font fontName="SansSerif" size="8"/></textElement>
+                <text><![CDATA[LifeForge Intelligent Recommendation System • Saved Archive]]></text>
+            </staticText>
+        </band>
+    </summary>
+</jasperReport>

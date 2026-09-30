@@ -235,32 +235,63 @@ public class RecommendationPriorityResolver {
         String activity = user == null || user.getActivityLevel() == null
                 ? "current"
                 : user.getActivityLevel().name().toLowerCase(Locale.ROOT).replace('_', ' ');
+        int age = (user != null && user.getAge() != null && user.getAge() > 0) ? user.getAge() : 30;
 
         return switch (goalCode) {
-            case "LOSE_WEIGHT" ->
-                    "Focus on sustainable nutrition, appropriate exercise, "
-                            + "hydration, and consistent sleep calibrated for " + activity + " activity.";
-            case "GAIN_WEIGHT" ->
-                    "Focus on calorie surplus nutrition, progressive exercise, "
-                            + "and proper recovery calibrated for " + activity + " activity.";
-            case "BUILD_MUSCLE" ->
-                    "Focus on progressive resistance training, protein-forward nutrition, "
-                            + "and recovery calibrated for " + activity + " activity.";
-            case "IMPROVE_FITNESS" ->
-                    "Focus on cardiovascular conditioning, functional mobility, "
-                            + "and supportive hydration calibrated for " + activity + " activity.";
+            case "LOSE_WEIGHT" -> {
+                if (age >= 50) {
+                    yield "Focus on preserving lean muscle with high-protein nutrition, joint-friendly low-impact exercise, "
+                            + "proactive hydration, and consistent restorative rest calibrated for age " + age + " and " + activity + " activity.";
+                } else if (age < 35) {
+                    yield "Focus on sustainable caloric deficit, higher training volume, protein-forward satiety, "
+                            + "and metabolic conditioning calibrated for age " + age + " and " + activity + " activity.";
+                } else {
+                    yield "Focus on sustainable nutrition, appropriate exercise, "
+                            + "hydration, and consistent sleep calibrated for age " + age + " and " + activity + " activity.";
+                }
+            }
+            case "GAIN_WEIGHT" -> {
+                if (age >= 50) {
+                    yield "Focus on nutrient-dense calorie surplus, joint-conscious progressive strength training, "
+                            + "and extended tissue recovery calibrated for age " + age + " and " + activity + " activity.";
+                } else {
+                    yield "Focus on calorie surplus nutrition, progressive exercise, "
+                            + "and proper recovery calibrated for age " + age + " and " + activity + " activity.";
+                }
+            }
+            case "BUILD_MUSCLE" -> {
+                if (age >= 50) {
+                    yield "Focus on joint-friendly resistance training (8–15 reps), higher per-meal protein (35–40g+ to overcome anabolic resistance), "
+                            + "proactive scheduled hydration, and extended recovery (48–72h) calibrated for age " + age + " and " + activity + " activity.";
+                } else if (age < 35) {
+                    yield "Focus on progressive resistance training (6–10 reps), protein-forward nutrition (~25–30g/meal), "
+                            + "workout hydration, and recovery calibrated for age " + age + " and " + activity + " activity.";
+                } else {
+                    yield "Focus on progressive resistance training, protein-forward nutrition, "
+                            + "and recovery calibrated for age " + age + " and " + activity + " activity.";
+                }
+            }
+            case "IMPROVE_FITNESS" -> {
+                if (age >= 50) {
+                    yield "Focus on joint-friendly cardiovascular conditioning, mobility prep, "
+                            + "and supportive daytime hydration calibrated for age " + age + " and " + activity + " activity.";
+                } else {
+                    yield "Focus on cardiovascular conditioning, functional mobility, "
+                            + "and supportive hydration calibrated for age " + age + " and " + activity + " activity.";
+                }
+            }
             case "SKIN_HEALTH", "IMPROVE_SKIN_HEALTH" ->
                     "Focus on cellular hydration, antioxidant-rich nutrition, "
-                            + "and restful sleep suited to your current lifestyle.";
+                            + "and restful sleep suited to age " + age + " and your lifestyle.";
             case "IMPROVE_SLEEP" ->
                     "Focus on evening wind-down rituals, consistent sleep schedule, "
-                            + "and daily micro-habits suited to your lifestyle.";
+                            + "and daily micro-habits suited to age " + age + " and your lifestyle.";
             case "POSTURE_CORRECTION" ->
                     "Focus on postural realignment exercises, ergonomic adjustments, "
-                            + "and consistent daily micro-habits.";
+                            + "and consistent daily micro-habits suited to age " + age + ".";
             default ->
                     "Focus on balanced nutrition, regular physical movement, "
-                            + "adequate hydration, and consistent restorative rest.";
+                            + "adequate hydration, and consistent restorative rest calibrated for age " + age + ".";
         };
     }
 

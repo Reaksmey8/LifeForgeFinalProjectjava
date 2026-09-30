@@ -47,6 +47,9 @@ public class GoalController extends BaseController {
             setError("Not logged in.");
             return Optional.empty();
         }
+        if (session.getCustomGoal() != null) {
+            return Optional.of(session.getCustomGoal());
+        }
         try {
             return goalService.getCurrentGoalForUser(current.getId());
         } catch (SQLException e) {
@@ -62,12 +65,30 @@ public class GoalController extends BaseController {
             return false;
         }
         try {
+            session.clearCustomGoal();
             goalService.selectGoal(current.getId(), goalId);
             return true;
         } catch (SQLException e) {
             setError(e, "Failed to select this goal.");
             return false;
         }
+    }
+
+    public boolean selectCustomGoal(Goal customGoal, Long baselineGoalId) {
+        User current = session.getCurrentUser();
+        if (current == null) {
+            setError("Not logged in.");
+            return false;
+        }
+        session.setCustomGoal(customGoal);
+        try {
+            if (baselineGoalId != null && baselineGoalId > 0 && current.getId() != null) {
+                goalService.selectGoal(current.getId(), baselineGoalId);
+            }
+        } catch (SQLException e) {
+            // Non-fatal if DB write fails; virtual custom goal remains active in session
+        }
+        return true;
     }
 
     public Goal createGoal(String code, String name, String description) {

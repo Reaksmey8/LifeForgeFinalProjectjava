@@ -21,6 +21,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -37,6 +38,12 @@ public class AiExplanationService implements RecommendationExplanationService {
 
     public void clearConversationHistory() {
         conversationHistory.clear();
+    }
+
+    private void pruneConversationHistory() {
+        while (conversationHistory.size() > 9) {
+            conversationHistory.remove(1);
+        }
     }
 
     /**
@@ -122,24 +129,77 @@ public class AiExplanationService implements RecommendationExplanationService {
     }
 
     public static String buildSystemPrompt(User user, Goal currentGoal, RecommendationCategory currentCategory) {
-        String goalName = (currentGoal != null) ? currentGoal.getName() : "General Wellness";
+        return buildSystemPrompt(user, currentGoal, currentCategory, null);
+    }
+
+    public static String buildSystemPrompt(User user, Goal currentGoal, RecommendationCategory currentCategory, Recommendation currentRecommendation) {
         String categoryName = (currentCategory != null) ? currentCategory.getName() : "General Health";
 
         int age = (user != null && user.getAge() != null) ? user.getAge() : 0;
+        String gender = (user != null && user.getGender() != null) ? user.getGender().name() : "Not specified";
         double height = (user != null && user.getHeight() != null) ? user.getHeight() : 0.0;
         double weight = (user != null && user.getWeight() != null) ? user.getWeight() : 0.0;
         double bmi = (user != null && user.getBmi() != null) ? user.getBmi() : 0.0;
+        String activityLevel = (user != null && user.getActivityLevel() != null)
+                ? user.getActivityLevel().name().replace('_', ' ').toLowerCase(Locale.ROOT)
+                : "Not specified";
+
+        String goalContext;
+        if (currentGoal != null) {
+            StringBuilder gc = new StringBuilder();
+            gc.append(String.format(Locale.ROOT, "Active Goal: '%s' | Active Category: '%s'. ", currentGoal.getName(), categoryName));
+            if (currentRecommendation != null) {
+                gc.append(String.format(Locale.ROOT, "Active Recommendation: '%s'. ",
+                        currentRecommendation.getTitle() != null ? currentRecommendation.getTitle() : ""));
+                if (currentRecommendation.getDescription() != null && !currentRecommendation.getDescription().isBlank()) {
+                    gc.append(String.format(Locale.ROOT, "Recommendation Context: '%s'. ", currentRecommendation.getDescription().trim()));
+                }
+                if (currentRecommendation.getRecommendedActions() != null && !currentRecommendation.getRecommendedActions().isBlank()) {
+                    gc.append(String.format(Locale.ROOT, "Recommended Actions: '%s'. ", currentRecommendation.getRecommendedActions().replaceAll("\\r?\\n+", " ").trim()));
+                }
+                if (currentRecommendation.getSuggestedTarget() != null && !currentRecommendation.getSuggestedTarget().isBlank()) {
+                    gc.append(String.format(Locale.ROOT, "Suggested Target: '%s'. ", currentRecommendation.getSuggestedTarget().trim()));
+                }
+                if (currentRecommendation.getExamples() != null && !currentRecommendation.getExamples().isBlank()) {
+                    gc.append(String.format(Locale.ROOT, "Examples: '%s'. ", currentRecommendation.getExamples().replaceAll("\\r?\\n+", " ").trim()));
+                }
+            }
+            goalContext = gc.toString();
+        } else {
+            goalContext = String.format(Locale.ROOT,
+                    "Goal Status: No goal selected yet | Active Category: '%s'. " +
+                    "CRITICAL GOAL RULES: " +
+                    "- The user has NOT selected a goal yet. " +
+                    "- Do NOT repeat the boilerplate phrase 'Please choose a goal through the normal Choose Goal flow' in every message. " +
+                    "- Do NOT assume, assign, mention, or display any active goal (such as 'General Wellness'). " +
+                    "- Do not pretend or state that an active goal exists. " +
+                    "- Recognize clearly that no goal has been selected yet. " +
+                    "- You may use the user's real profile (age, gender, height, weight, activity level) to provide guidance when relevant. " +
+                    "- If the user asks 'Which goal is matching with me?' or asks about goal choice: " +
+                    "  1. List LIFEForge's exact 3 core goals directly: 1. Build Lean Muscle, 2. Lose Weight / Fat Loss, 3. General Health & Vitality. " +
+                    "  2. Recommend the best goal based on their metrics (e.g., 'Given your moderate activity and normal BMI, 'Build Lean Muscle' or 'General Health & Vitality' fits you best.'). " +
+                    "  3. Give clear navigation instructions: 'Press [ESC] to return to the Main Menu, then press [2] to lock in your goal.' ",
+                    categoryName);
+        }
 
         return String.format(Locale.ROOT,
                 "You are the LIFEForge Health Assistant. " +
-                "Active Goal: '%s' | Active Category: '%s'. " +
-                "User Metrics: Age %d, Height %.1f cm, Weight %.1f kg (BMI %.1f). " +
+                "%s" +
+                "User Metrics: Age %d, Gender: %s, Height %.1f cm, Weight %.1f kg (BMI %.1f), Activity Level: %s. " +
                 "Rules: " +
                 "1. Directly answer the user's specific query (e.g., duration, routine, dosage, frequency) rather than repeating boilerplate definitions. " +
                 "2. Support all lifestyle categories (Exercise, Nutrition, Sleep, Hydration, Mental Wellness, Posture, etc.). " +
                 "3. Clinical BMI reference: <18.5 is Underweight, 18.5-24.9 is Normal, 25.0-29.9 is Overweight, >=30.0 is Obese. " +
-                "4. Keep responses grounded, actionable, and under 3 concise sentences unless explicitly asked for a list.",
-                goalName, categoryName, age, height, weight, bmi
+                "4. Keep responses grounded, actionable, and under 3 concise sentences unless explicitly asked for a list. " +
+                "5. Directly answer the user's ACTUAL question instead of blindly following the current recommendation. If asked about a meal (e.g. 'What should I eat for breakfast?'), answer the breakfast question directly. If asked why this recommendation fits (e.g. 'Why should I eat more protein?'), explain the recommendation directly. " +
+                "6. GOAL CONFLICT RECOGNITION: Detect when the user's question conflicts with the current goal (e.g. current goal is Lose Weight, but question is about gaining weight, bulking, or gaining 3kg in 1 week; or current goal is Gain Weight, but question is about losing weight). In any conflict: " +
+                "   a. Recognize and clearly explain that their current active goal is '%s', while their question is about a different goal. " +
+                "   b. Do NOT automatically change their selected goal. " +
+                "   c. Do NOT pretend they are already using that other goal. " +
+                "   d. Do NOT ignore the user's question. Provide safe, useful general guidance instead of an extreme rapid-weight change plan (explain that rapid changes like 3kg in 1 week are unrealistic and unsafe; healthy weight change is gradual, typically 0.25-0.5 kg/week). " +
+                "   e. If the user wants personalized recommendations for another goal, explicitly instruct them to change their goal through the normal Choose Goal flow (press [ESC] to return to the Main Menu, then select Choose Goal). " +
+                "   f. Do not invent new calorie, protein, hydration, weight, or exercise targets, and do not make unsupported medical claims.",
+                goalContext, age, gender, height, weight, bmi, activityLevel, (currentGoal != null ? currentGoal.getName() : "None")
         );
     }
 
@@ -164,7 +224,7 @@ public class AiExplanationService implements RecommendationExplanationService {
         Long catId = category != null ? category.getId() : null;
         String catName = category != null ? category.getName() : null;
 
-        String systemPrompt = buildSystemPrompt(user, goal, category);
+        String systemPrompt = buildSystemPrompt(user, goal, category, recommendation);
 
         // a. Ensure the system role prompt sits at index 0.
         Map<String, String> sysMsg = new LinkedHashMap<>();
@@ -182,6 +242,7 @@ public class AiExplanationService implements RecommendationExplanationService {
         userMsg.put("role", "user");
         userMsg.put("content", question.trim());
         conversationHistory.add(userMsg);
+        pruneConversationHistory();
 
         if (!isAvailable()) {
             return chatFallbackWithNotice(user, goal, category, recommendation, plan, question);
@@ -200,11 +261,29 @@ public class AiExplanationService implements RecommendationExplanationService {
                 response = sanitizeKhmerText(response);
             }
 
+            if (checkGoalConflict(goal, question) != null) {
+                String respLower = response.toLowerCase(Locale.ROOT);
+                boolean mentionedGoal = (goal != null && goal.getName() != null && respLower.contains(goal.getName().toLowerCase(Locale.ROOT)))
+                        || respLower.contains("current goal")
+                        || respLower.contains("active goal");
+                boolean addressedConflict = respLower.contains("different goal")
+                        || respLower.contains("conflict")
+                        || respLower.contains("choose goal")
+                        || respLower.contains("gain")
+                        || respLower.contains("lose")
+                        || respLower.contains("gradual");
+                if (!mentionedGoal && !addressedConflict) {
+                    if (VERBOSE) System.err.println("[LifeForge AI] Model failed to address goal conflict. Using calibrated guidance.");
+                    return chatFallbackWithNotice(user, goal, category, recommendation, plan, question);
+                }
+            }
+
             // d. Append Ollama's response: {"role": "assistant", "content": aiReply}.
             Map<String, String> assistantMsg = new LinkedHashMap<>();
             assistantMsg.put("role", "assistant");
             assistantMsg.put("content", response.trim());
             conversationHistory.add(assistantMsg);
+            pruneConversationHistory();
 
             CategoryMatch match = detectCategoryMatch(plan, question, response);
             Long suggestedId = match != null ? match.id : catId;
@@ -227,8 +306,77 @@ public class AiExplanationService implements RecommendationExplanationService {
         assistantMsg.put("role", "assistant");
         assistantMsg.put("content", textWithNotice);
         conversationHistory.add(assistantMsg);
+        pruneConversationHistory();
 
         return new AiChatResponse(textWithNotice, false, base.suggestedCategoryId, base.suggestedCategoryName);
+    }
+
+    public static class GoalConflictInfo {
+        public final String conflictingTopic;
+        public final String safeGuidance;
+
+        public GoalConflictInfo(String conflictingTopic, String safeGuidance) {
+            this.conflictingTopic = conflictingTopic;
+            this.safeGuidance = safeGuidance;
+        }
+    }
+
+    public static GoalConflictInfo checkGoalConflict(Goal goal, String question) {
+        if (goal == null || goal.getName() == null || question == null) {
+            return null;
+        }
+        String gLower = goal.getName().toLowerCase(Locale.ROOT);
+        String qLower = question.toLowerCase(Locale.ROOT);
+
+        boolean isLossGoal = gLower.contains("lose weight") || gLower.contains("weight loss")
+                || gLower.contains("fat loss") || gLower.contains("cut");
+        boolean isGainGoal = gLower.contains("gain weight") || gLower.contains("build muscle")
+                || gLower.contains("muscle") || gLower.contains("hypertrophy") || gLower.contains("bulk");
+
+        // Check if user is asking to gain weight while on a weight loss goal
+        boolean asksWeightGain = qLower.contains("gain weight") || qLower.contains("gaining weight")
+                || qLower.contains("weight gain") || qLower.contains("bulk") || qLower.contains("bulking")
+                || qLower.contains("gain muscle") || qLower.contains("build muscle")
+                || qLower.matches(".*\\bgain\\s+\\d+.*")
+                || (qLower.contains("gain") && (qLower.contains("kg") || qLower.contains("kilo") || qLower.contains("lbs") || qLower.contains("pound") || qLower.contains("mass") || qLower.contains("fat")));
+
+        if (isLossGoal && asksWeightGain) {
+            String guidance;
+            if (qLower.contains("1 week") || qLower.contains("one week") || qLower.contains("week")
+                    || qLower.matches(".*\\b\\d+\\s*(kg|kilo|lbs|pound).*")) {
+                guidance = "Gaining 3 kg (or rapid weight) in one week is unrealistic and unsafe. " +
+                        "Safe, sustainable weight adjustments occur gradually (typically 0.25–0.5 kg per week) " +
+                        "through a modest caloric surplus, nutrient-dense whole foods, and progressive resistance training, " +
+                        "rather than rapid weight spikes.";
+            } else {
+                guidance = "Healthy weight gain requires a gradual, controlled caloric surplus paired with " +
+                        "progressive resistance training (targeting 0.25–0.5 kg per week) rather than rapid weight changes.";
+            }
+            return new GoalConflictInfo("gaining weight", guidance);
+        }
+
+        // Check if user is asking to lose weight while on a weight gain / muscle building goal
+        boolean asksWeightLoss = qLower.contains("lose weight") || qLower.contains("losing weight")
+                || qLower.contains("weight loss") || qLower.contains("fat loss") || qLower.contains("cut weight")
+                || qLower.contains("cutting weight")
+                || qLower.matches(".*\\blose\\s+\\d+.*")
+                || (qLower.contains("lose") && (qLower.contains("kg") || qLower.contains("kilo") || qLower.contains("lbs") || qLower.contains("pound") || qLower.contains("fat")));
+
+        if (isGainGoal && asksWeightLoss) {
+            String guidance;
+            if (qLower.contains("1 week") || qLower.contains("one week") || qLower.contains("week")
+                    || qLower.matches(".*\\b\\d+\\s*(kg|kilo|lbs|pound).*")) {
+                guidance = "Losing weight rapidly in one week is unrealistic and unsafe, often causing muscle loss and dehydration. " +
+                        "Sustainable fat loss occurs gradually (typically around 0.5 kg per week) through a modest " +
+                        "caloric deficit, adequate protein, and regular physical activity while preserving lean muscle.";
+            } else {
+                guidance = "Sustainable fat loss occurs gradually (typically around 0.5 kg per week) through a modest " +
+                        "caloric deficit, adequate protein, and regular physical activity while preserving lean muscle.";
+            }
+            return new GoalConflictInfo("losing weight", guidance);
+        }
+
+        return null;
     }
 
     public AiChatResponse chatFallback(User user, Goal goal, RecommendationCategory category,
@@ -248,6 +396,21 @@ public class AiExplanationService implements RecommendationExplanationService {
 
         StringBuilder sb = new StringBuilder();
         String qLower = question != null ? question.toLowerCase(Locale.ROOT).trim() : "";
+
+        // Goal Conflict Detection
+        GoalConflictInfo conflict = checkGoalConflict(goal, question);
+        if (conflict != null) {
+            sb.append("Your current active goal is '").append(goalName).append("', ")
+              .append("while your question is about ").append(conflict.conflictingTopic).append(".\n\n")
+              .append("• Safe Guidance:\n  ")
+              .append(conflict.safeGuidance).append("\n\n")
+              .append("• Goal Selection:\n  ")
+              .append("Your current goal remains '").append(goalName).append("'. ")
+              .append("If you would like personalized recommendations, targets, and meal guidance for ")
+              .append(conflict.conflictingTopic).append(", please change your goal through the normal Choose Goal flow ")
+              .append("(press [ESC] to return to the Main Menu, then select Choose Goal).");
+            return new AiChatResponse(sb.toString().trim(), false, catId, catName);
+        }
 
         // Check if user is asking for Khmer translation or Khmer guidance
         if (qLower.contains("khmer") || qLower.contains("ខ្មែរ")) {
@@ -376,6 +539,11 @@ public class AiExplanationService implements RecommendationExplanationService {
         sb.append(":\n\n");
 
         if (recommendation != null) {
+            if ((qLower.contains("why") || qLower.contains("benefit") || qLower.contains("how does") || qLower.contains("reason"))
+                    && recommendation.getDescription() != null && !recommendation.getDescription().isBlank()) {
+                sb.append("• Why This Recommendation Fits:\n  ")
+                        .append(recommendation.getDescription()).append("\n\n");
+            }
             if ((qLower.contains("breakfast") || qLower.contains("eat") || qLower.contains("meal") || qLower.contains("food")
                     || qLower.contains("nutrient") || qLower.contains("diet") || qLower.contains("nutrition"))
                     && recommendation.getExamples() != null && !recommendation.getExamples().isBlank()) {
@@ -416,7 +584,8 @@ public class AiExplanationService implements RecommendationExplanationService {
             return new AiChatResponse("Please enter a question for the AI assistant.", false);
         }
 
-        String systemPrompt = buildSystemPrompt(user, goal, null);
+        String systemPrompt = buildGlobalAssistantPrompt(
+                user, goal, plan, calorieSummary, hydrationLiters, calorieRelevant, recentConversation, question);
 
         // a. Ensure the system role prompt sits at index 0.
         Map<String, String> sysMsg = new LinkedHashMap<>();
@@ -434,6 +603,7 @@ public class AiExplanationService implements RecommendationExplanationService {
         userMsg.put("role", "user");
         userMsg.put("content", question.trim());
         conversationHistory.add(userMsg);
+        pruneConversationHistory();
 
         if (!isAvailable()) {
             return globalFallbackWithNotice(user, goal, plan, calorieSummary, hydrationLiters, calorieRelevant, question);
@@ -457,6 +627,7 @@ public class AiExplanationService implements RecommendationExplanationService {
             assistantMsg.put("role", "assistant");
             assistantMsg.put("content", response.trim());
             conversationHistory.add(assistantMsg);
+            pruneConversationHistory();
 
             CategoryMatch match = detectCategoryMatch(plan, question, response);
             Long catId = match != null ? match.id : null;
@@ -480,6 +651,7 @@ public class AiExplanationService implements RecommendationExplanationService {
         assistantMsg.put("role", "assistant");
         assistantMsg.put("content", textWithNotice);
         conversationHistory.add(assistantMsg);
+        pruneConversationHistory();
 
         return new AiChatResponse(textWithNotice, false, base.suggestedCategoryId, base.suggestedCategoryName);
     }
@@ -540,7 +712,152 @@ public class AiExplanationService implements RecommendationExplanationService {
 
         boolean hasGoal = goal != null;
 
-        if (qLower.contains("goal") || qLower.contains("suit")) {
+        // 1. BMR / TDEE Questions
+        if (qLower.contains("bmr") || qLower.contains("tdee")) {
+            if (qLower.contains("my bmr") || qLower.contains("my tdee") || qLower.contains("what is my")) {
+                CalorieService.CalorieSummary summary = calorieSummary;
+                if (summary == null && user != null && user.getGender() != null && user.getWeightKg() != null
+                        && user.getHeightCm() != null && user.getAge() != null && user.getActivityLevel() != null) {
+                    try {
+                        summary = new CalorieService().calculateFor(user, goal);
+                    } catch (Exception ignored) {
+                    }
+                }
+                if (summary != null && summary.bmr > 0) {
+                    sb.append(String.format(Locale.ROOT,
+                            "Based on your profile, your estimated Basal Metabolic Rate (BMR) is ~%.0f kcal/day, and your estimated Total Daily Energy Expenditure (TDEE) is ~%.0f kcal/day.\n\n" +
+                            "BMR is what your body burns at complete rest, while TDEE reflects your total daily energy burn including your activity level.",
+                            summary.bmr, summary.tdee));
+                } else {
+                    sb.append("Basal Metabolic Rate (BMR) is the number of calories your body burns at rest. Update your profile with your age, gender, height, weight, and activity level to calculate your personalized BMR in LIFEForge.");
+                }
+            } else if (qLower.contains("bmr")) {
+                sb.append("BMR (Basal Metabolic Rate) is the number of calories your body needs to perform basic life-sustaining functions (such as breathing, circulation, and cell production) while at complete rest.");
+            } else {
+                sb.append("TDEE (Total Daily Energy Expenditure) is the total number of calories you burn each day. It combines your Basal Metabolic Rate (BMR) with the energy expended through daily movement, exercise, and digestion.");
+            }
+        // 2. Goal Comparison: Gain Weight vs Build Muscle
+        } else if ((qLower.contains("difference") || qLower.contains("compare") || qLower.contains("vs"))
+                && (qLower.contains("gain weight") || qLower.contains("build muscle"))) {
+            sb.append("Here is the difference between Gain Weight and Build Muscle in LIFEForge:\n\n" +
+                    "• Gain Weight: Focuses primarily on increasing overall body mass safely through a consistent nutritional caloric surplus, nutrient-dense meals, and healthy lifestyle habits.\n\n" +
+                    "• Build Muscle: Focuses specifically on muscular hypertrophy and strength development through progressive resistance training, adequate protein distribution, and focused recovery.");
+        // 3. Available Goals List
+        } else if ((qLower.contains("goal") || qLower.contains("goals"))
+                && (qLower.contains("available") || qLower.contains("exist") || qLower.contains("list") || qLower.contains("in lifeforge") || qLower.contains("all goal") || qLower.contains("official") || qLower.contains("what are"))) {
+            sb.append("LIFEForge offers 8 primary goal areas:\n\n" +
+                    "1. Lose Weight — Sustainable fat loss and caloric management\n" +
+                    "2. Gain Weight — Healthy, gradual mass gain via nutritional surplus\n" +
+                    "3. Build Muscle — Strength training and hypertrophy\n" +
+                    "4. Improve Fitness — Cardiovascular endurance and daily stamina\n" +
+                    "5. Improve Skin Health — Cellular hydration and antioxidant nutrition\n" +
+                    "6. Improve Sleep — Circadian consistency and restorative rest\n" +
+                    "7. General Wellness — Balanced, foundational health habits\n" +
+                    "8. Posture Correction — Ergonomics, mobility, and core stability");
+        // 4. Why specific goal fits (e.g. Gain Weight)
+        } else if ((qLower.contains("why") || qLower.contains("how")) && qLower.contains("gain weight") && (qLower.contains("fit") || qLower.contains("profile") || qLower.contains("suit"))) {
+            double height = (user != null && user.getHeightCm() != null) ? user.getHeightCm() : 0;
+            double weight = (user != null && user.getWeightKg() != null) ? user.getWeightKg() : 0;
+            double bmi = (height > 0 && weight > 0) ? weight / ((height / 100.0) * (height / 100.0)) : 0;
+            sb.append("Gain Weight is designed for individuals looking to build body mass safely and sustainably.\n\n");
+            if (bmi > 0 && bmi < 18.5) {
+                sb.append(String.format(Locale.ROOT, "Given your leaner baseline (BMI %.1f), this goal pairs a caloric surplus with nutrient-dense foods and consistent meal timing to support healthy weight gain.\n", bmi));
+            } else {
+                sb.append("It establishes a structured nutritional foundation with an energy surplus and balanced macronutrients to support gradual mass increase without unnecessary metabolic stress.\n");
+            }
+        // 5. Why current goal fits (selected goal)
+        } else if ((qLower.contains("why") || qLower.contains("how"))
+                && (qLower.contains("my goal") || qLower.contains("current goal") || qLower.contains("selected goal"))
+                && (qLower.contains("fit") || qLower.contains("suit") || qLower.contains("suitable"))) {
+            if (hasGoal) {
+                sb.append(String.format(Locale.ROOT,
+                        "Your current goal ('%s') aligns with your profile and activity level by establishing targeted lifestyle recommendations and daily routines designed specifically for this objective.",
+                        goal.getName()));
+            } else {
+                sb.append("You have not selected a goal yet. Based on your profile information, I can help you understand which LIFEForge goal areas may be relevant to explore.");
+            }
+        // 6. User asks about their profile
+        } else if (qLower.contains("profile") && (qLower.contains("explain") || qLower.contains("tell me") || qLower.contains("about") || qLower.contains("what is my") || qLower.contains("summary"))) {
+            double height = (user != null && user.getHeightCm() != null) ? user.getHeightCm() : 0;
+            double weight = (user != null && user.getWeightKg() != null) ? user.getWeightKg() : 0;
+            double bmi = (height > 0 && weight > 0) ? weight / ((height / 100.0) * (height / 100.0)) : 0;
+            String bmiCat = bmi < 18.5 ? "Underweight" : bmi < 25.0 ? "Normal" : bmi < 30.0 ? "Overweight" : "Obese";
+            String actStr = (user != null && user.getActivityLevel() != null)
+                    ? user.getActivityLevel().name().replace('_', ' ').toLowerCase(Locale.ROOT)
+                    : "Not specified";
+
+            sb.append("Here is a summary of your profile information:\n\n");
+            sb.append("• Age: ").append(user != null && user.getAge() != null ? user.getAge() : "Not specified").append('\n');
+            sb.append("• Gender: ").append(user != null && user.getGender() != null ? user.getGender() : "Not specified").append('\n');
+            sb.append(String.format(Locale.ROOT, "• Height: %.1f cm\n", height));
+            sb.append(String.format(Locale.ROOT, "• Weight: %.1f kg\n", weight));
+            if (bmi > 0) {
+                sb.append(String.format(Locale.ROOT, "• Calculated BMI: %.1f (%s)\n", bmi, bmiCat));
+            }
+            sb.append("• Activity Level: ").append(actStr).append("\n\n");
+            sb.append("This profile data is used as context to calibrate hydration, energy expenditure, and lifestyle recommendations.");
+        // 7. Fatigue / Tired inquiry (Non-diagnostic)
+        } else if (qLower.contains("tired") || qLower.contains("fatigue") || qLower.contains("exhausted") || qLower.contains("no energy") || qLower.contains("low energy")) {
+            sb.append("Feeling tired can be influenced by multiple everyday lifestyle factors:\n\n" +
+                    "• Sleep Quality & Duration: Inconsistent sleep schedules or getting fewer than 7-9 hours of restorative sleep.\n" +
+                    "• Hydration: Mild dehydration often manifests as fatigue, sluggishness, or reduced alertness.\n" +
+                    "• Nutrition & Fuel: Skipping balanced meals, insufficient protein, or large blood sugar swings from refined sugars.\n" +
+                    "• Physical Movement & Stress: Prolonged sedentary periods or high sustained stress levels.\n\n" +
+                    "Note: If fatigue is persistent, severe, or concerning, please discuss it with a qualified healthcare professional.");
+        // 8. Sleep hygiene
+        } else if (qLower.contains("sleep hygiene")) {
+            sb.append("Sleep hygiene refers to daily habits and an optimal bedroom environment that support consistent, high-quality sleep:\n\n" +
+                    "• Consistency: Keep identical bed and wake times every day, even on weekends.\n" +
+                    "• Environment: Maintain a cool, quiet, and dark sleeping space.\n" +
+                    "• Screen Curfew: Limit blue light exposure from phones, tablets, and computers 30-60 minutes before bedtime.\n" +
+                    "• Wind-Down: Establish a calming pre-bed routine such as reading or light stretching.");
+        // 9. Breakfast guidance
+        } else if (qLower.contains("breakfast")) {
+            sb.append("Here are practical, balanced breakfast ideas to support steady energy:\n\n" +
+                    "• Protein & Greens: Eggs or scrambled tofu paired with sautéed spinach, mushrooms, and a slice of whole-grain toast.\n" +
+                    "• High-Fiber Oats: Warm oatmeal topped with fresh berries, a handful of walnuts or almonds, and chia seeds.\n" +
+                    "• Yogurt Bowl: Greek yogurt layered with sliced fruit, pumpkin seeds, and a light drizzle of honey.\n" +
+                    "• Quick Smoothie: Blended unsweetened milk or water, a scoop of protein powder, a handful of greens, and half a banana.");
+        // 10. Ambiguous improvement clarification
+        } else if (qLower.equals("what should i improve?") || qLower.equals("what should i improve") || qLower.equals("how to improve?")) {
+            sb.append("I can help with that. Would you like to focus on your nutrition, exercise, sleep, hydration, or choosing a LIFEForge goal?");
+        // 11. Lifestyle improvement
+        } else if (qLower.contains("lifestyle") || qLower.contains("improve my lifestyle")
+                || (qLower.contains("improve my") && !qLower.contains("sleep") && !qLower.contains("food") && !qLower.contains("eat") && !qLower.contains("nutrition") && !qLower.contains("exercise") && !qLower.contains("workout") && !qLower.contains("water") && !qLower.contains("posture") && !qLower.contains("skin"))) {
+            sb.append("To improve your daily lifestyle, LIFEForge focuses on core foundational pillars:\n\n" +
+                    "• Hydration: Sip water steadily throughout the day.\n" +
+                    "• Balanced Nutrition: Eat whole, nutrient-dense foods with protein at every meal.\n" +
+                    "• Physical Movement: Engage in regular exercise matching your activity level.\n" +
+                    "• Restorative Sleep: Maintain 7-9 hours of consistent sleep nightly.\n\n" +
+                    "You can explore any of these areas or select a LIFEForge goal when you are ready.");
+        // 12. Matching goal inquiry
+        } else if (!hasGoal && qLower.contains("match")) {
+            sb.append("You have not selected a goal yet. Here are LIFEForge's 3 core goals:\n\n");
+            sb.append("1. Build Lean Muscle\n");
+            sb.append("2. Lose Weight / Fat Loss\n");
+            sb.append("3. General Health & Vitality\n\n");
+
+            double height = (user != null && user.getHeightCm() != null) ? user.getHeightCm() : 0;
+            double weight = (user != null && user.getWeightKg() != null) ? user.getWeightKg() : 0;
+            double bmi = (height > 0 && weight > 0) ? weight / ((height / 100.0) * (height / 100.0)) : 0;
+            String actStr = (user != null && user.getActivityLevel() != null)
+                    ? user.getActivityLevel().name().replace('_', ' ').toLowerCase(Locale.ROOT)
+                    : "moderate";
+
+            String recommendation;
+            if (bmi > 0 && bmi < 18.5) {
+                recommendation = String.format(Locale.ROOT, "Given your %s activity and lower BMI (%.1f), 'Build Lean Muscle' fits you best.", actStr, bmi);
+            } else if (bmi >= 25.0) {
+                recommendation = String.format(Locale.ROOT, "Given your %s activity and BMI (%.1f), 'Lose Weight / Fat Loss' fits you best.", actStr, bmi);
+            } else if (bmi > 0) {
+                recommendation = String.format(Locale.ROOT, "Given your %s activity and normal BMI (%.1f), 'Build Lean Muscle' or 'General Health & Vitality' fits you best.", actStr, bmi);
+            } else {
+                recommendation = String.format(Locale.ROOT, "Given your %s activity level, 'General Health & Vitality' fits you best.", actStr);
+            }
+            sb.append(recommendation).append("\n\n");
+            sb.append("Press [ESC] to return to the Main Menu, then press [2] to lock in your goal.");
+        // 13. General goal inquiry
+        } else if (qLower.contains("goal") || qLower.contains("suit") || qLower.contains("choose a goal")) {
             sb.append("Based on your profile, here is guidance on lifestyle directions that may suit you:\n\n");
             double height = (user != null && user.getHeightCm() != null) ? user.getHeightCm() : 0;
             double weight = (user != null && user.getWeightKg() != null) ? user.getWeightKg() : 0;
@@ -557,6 +874,7 @@ public class AiExplanationService implements RecommendationExplanationService {
             }
             sb.append("• Lifestyle & Recovery: If your focus is quality of life, 'Improve Sleep' or 'Skin Health' provide powerful habit foundations.\n\n");
             sb.append("Note: LIFEForge does not automatically select or change your goal.");
+        // 14. Focus areas
         } else if (qLower.contains("focus") || qLower.startsWith("1")) {
             sb.append("Here are your key lifestyle focus areas:\n\n");
             if (hasGoal && plan != null && plan.getAreas() != null && !plan.getAreas().isEmpty()) {
@@ -586,6 +904,7 @@ public class AiExplanationService implements RecommendationExplanationService {
                 sb.append("🏃 Physical Activity — Regular movement appropriate for your ").append(actStr).append(" activity level\n");
                 sb.append("😴 Rest & Recovery — 7-9 hours of consistent, restorative sleep");
             }
+        // 15. Nutrition
         } else if (qLower.contains("eat") || qLower.contains("food") || qLower.contains("nutrition") || qLower.startsWith("2")) {
             PersonalizedPlanResult.AreaItem nut = findAreaByKeyword(plan, "nutrition");
             sb.append("Here is nutrition guidance tailored to your profile:\n\n");
@@ -603,6 +922,7 @@ public class AiExplanationService implements RecommendationExplanationService {
                 sb.append(String.format("Maintenance Estimate: ~%.0f kcal/day\n", calorieSummary.tdee));
             }
             match = nut != null ? new CategoryMatch(nut.category().getId(), nut.category().getName()) : null;
+        // 16. Exercise
         } else if (qLower.contains("exercise") || qLower.contains("workout") || qLower.startsWith("3")) {
             PersonalizedPlanResult.AreaItem exe = findAreaByKeyword(plan, "exercise");
             String actStr = user != null && user.getActivityLevel() != null
@@ -618,6 +938,7 @@ public class AiExplanationService implements RecommendationExplanationService {
                 sb.append("Actions: Maintain structured physical training sessions balancing strength development and cardiovascular conditioning.\n\n");
             }
             match = exe != null ? new CategoryMatch(exe.category().getId(), exe.category().getName()) : null;
+        // 17. Sleep
         } else if (qLower.contains("sleep") || qLower.contains("rest") || qLower.contains("bedtime") || qLower.contains("recover") || qLower.startsWith("4")) {
             PersonalizedPlanResult.AreaItem slp = findAreaByKeyword(plan, "sleep");
             sb.append("Here is sleep and recovery guidance tailored to your profile:\n\n");
@@ -631,6 +952,7 @@ public class AiExplanationService implements RecommendationExplanationService {
             }
             sb.append("Key Target: 7-9 hours/night in a cool, quiet, and dark sleep environment.");
             match = slp != null ? new CategoryMatch(slp.category().getId(), slp.category().getName()) : null;
+        // 18. Hydration
         } else if (qLower.contains("water") || qLower.contains("drink") || qLower.contains("hydration") || qLower.startsWith("5")) {
             String actStr = user != null && user.getActivityLevel() != null
                     ? user.getActivityLevel().name().replace('_', ' ').toLowerCase(Locale.ROOT)
@@ -641,6 +963,7 @@ public class AiExplanationService implements RecommendationExplanationService {
             sb.append("Guidance: Sip water steadily throughout the day rather than large amounts at once to support cellular metabolism and recovery.");
             PersonalizedPlanResult.AreaItem hyd = findAreaByKeyword(plan, "hydration");
             match = hyd != null ? new CategoryMatch(hyd.category().getId(), hyd.category().getName()) : null;
+        // 19. Plan Overview
         } else if (hasGoal && (qLower.contains("plan") || qLower.contains("explain"))) {
             sb.append("Here is an overview of your LIFEForge personalized lifestyle plan:\n\n");
             if (plan != null && plan.getAreas() != null) {
@@ -654,6 +977,7 @@ public class AiExplanationService implements RecommendationExplanationService {
                 sb.append(String.format(" | Calorie Target ~%.0f kcal/day", calorieSummary.suggestedTarget));
             }
             sb.append(" | Sleep 7-9 hrs/night.");
+        // 20. Default / General Lifestyle
         } else {
             sb.append("AI assistant is currently offline. Here is your official LIFEForge lifestyle guidance:\n\n");
             if (hasGoal && plan != null && plan.getAreas() != null) {
@@ -680,7 +1004,7 @@ public class AiExplanationService implements RecommendationExplanationService {
         return new AiChatResponse(sb.toString().trim(), false, catId, catName);
     }
 
-    private String buildGlobalAssistantPrompt(
+    public String buildGlobalAssistantPrompt(
             User user,
             Goal goal,
             PersonalizedPlanResult plan,
@@ -691,99 +1015,120 @@ public class AiExplanationService implements RecommendationExplanationService {
             String question) {
 
         StringBuilder sb = new StringBuilder("""
-                You are the LIFEForge conversational assistant.
-                The official LIFEForge Rule Engine recommendation supplied in the context is authoritative.
-                Your job is to explain, summarize, clarify, and help the user navigate the existing LIFEForge plan.
+                You are the LIFEForge conversational assistant, a smart GENERAL LIFESTYLE ASSISTANT.
+                Your primary job is to understand the user's question and intent FIRST, then answer that question directly.
 
-                CRITICAL INSTRUCTIONS:
-                - The user interface does NOT display the user's active goal or goal status.
-                - DO NOT begin your response by stating or echoing the user's active goal (e.g. do NOT say "Since your goal is Lose Weight...").
-                - Ground your advice in the user's profile and rule-engine targets naturally.
-                - Do NOT require or demand that the user choose a goal.
-                - Never replace or modify the official recommendation.
-                - Never invent numeric targets.
-                - Never recalculate BMR, TDEE, calories, hydration, or other official targets.
-                - Only quote numeric values supplied by LIFEForge.
-                - Never invent user profile information.
-                - Never invent diagnoses.
-                - Never provide medical diagnosis or medical treatment.
-                - LIFEForge is NOT a tracking application.
-                - Do not ask users to log calories, water, meals, exercise, sleep, mood, symptoms, or habits.
-                - Do not create streaks or tracking behavior.
-                - If the user asks something outside LIFEForge's lifestyle guidance scope, politely explain that you are the LIFEForge lifestyle assistant and redirect toward their LIFEForge plan.
+                CRITICAL DIRECTIVES — UNDERSTAND INTENT FIRST:
+                - Before answering, determine what the user is actually asking about.
+                - Do NOT automatically convert every question into a weight range, calorie recommendation, goal recommendation, or medical explanation.
+                - Only discuss those topics when they are directly relevant to the user's question.
+                - Match your response to the user's actual question:
+                  * If the user asks about goals (e.g. "Which goal fits me?", "I want to know about the goal that fit with me", "What goal should I choose?"):
+                    Discuss suitable LIFEForge goal areas based on their profile. Do NOT invent a weight target (e.g. never say "I recommend 50-70 kg").
+                  * If the user asks why a specific goal fits (e.g. "Why would Gain Weight fit my profile?"):
+                    Explain how that goal relates to their profile. Do not invent unrelated weight targets.
+                  * If the user asks about breakfast or food: give practical nutrition guidance. Do not force goal selection or weight analysis.
+                  * If the user asks about exercise: give exercise guidance. Do not switch to nutrition unless relevant.
+                  * If the user asks about sleep: give sleep guidance.
+                  * If the user asks about sleep hygiene: explain sleep hygiene principles clearly.
+                  * If the user asks about water: give hydration guidance quoting official LIFEForge targets if available.
+                  * If the user asks "Why am I tired?": do NOT diagnose. Give general lifestyle factors (sleep, hydration, nutrition, stress) and note that persistent symptoms should be evaluated by a healthcare professional.
+                  * If the user asks "What is BMR?" or "What is TDEE?": explain the concept clearly.
+                  * If the user asks "What is my BMR?": quote the calculated BMR provided below if available.
+                  * If the user asks "Can you explain my profile?" or "Tell me about my profile": summarize their profile information.
+                  * If the user asks "What should I focus on?": analyze their profile and explain relevant focus areas without forcing a goal.
+                  * If the user asks "What goals are available in LIFEForge?": list and explain the available goals.
+                  * If the user asks "What is the difference between Gain Weight and Build Muscle?": compare those two goals clearly.
+                  * If the user asks "Why is my current goal suitable for me?": use their selected goal and profile to explain the relationship.
+                  * If the user's question is ambiguous (e.g. "What should I improve?"): ask a short clarification (e.g. nutrition, exercise, sleep, hydration, or choosing a goal) instead of guessing.
 
-                NUMERIC LOCKDOWN:
-                - Only quote the numeric targets provided below (e.g. hydration liters, BMR, TDEE, calories).
-                - Do not substitute or calculate alternative formulas or ranges (e.g. do not invent protein g/kg/day numbers).
-                - For nutrition, emphasize qualitative guidance (protein-rich foods, vegetables & fiber, complex carbs, balanced meals).
+                LIFEFORGE GOALS:
+                - Lose Weight
+                - Gain Weight
+                - Build Muscle
+                - Improve Fitness
+                - Improve Skin Health
+                - Improve Sleep
+                - General Wellness
+                - Posture Correction
 
-                RESPONSE STYLE (STRICT):
-                - BREVITY: Keep answers strictly under 80–100 words. Never output walls of text.
-                - NO PSEUDO-SCIENCE: Strictly avoid buzzwords like "toxin buildup", "flushing toxins", or detox claims. Focus on biological recovery and hydration.
-                - NO UNCALIBRATED NUMBERS: Do not invent new gram, milliliter, or calorie figures. Quote only the user's existing calibrated Rule Engine targets.
+                GOAL CONTEXT & SELECTION RULES:
+                - If the user has NOT selected a goal:
+                  * Never assume any goal (never say "Your goal is General Wellness", etc.).
+                  * Do NOT create or assign a goal automatically.
+                  * Discuss relevant LIFEForge goals, explain why they may fit, and let the user make the final selection.
+                  * Do NOT repeat boilerplate phrases like "Please choose a goal through the normal Choose Goal flow" in every message.
+                - If the user ALREADY has a selected goal:
+                  * Dashboard AI Assistant is still GENERAL / FREE.
+                  * Do NOT display "Current Goal: ..." or "Your active goal is..." unless the user specifically asks about their current goal.
+                  * Use the selected goal internally as context to make answers relevant, but answer the question directly.
+
+                PROFILE-AWARE, NOT PROFILE-OBSESSED:
+                - Use the profile as context when relevant. Do NOT force every answer into weight/calorie/BMI analysis.
+                - Do NOT start every answer with "Considering your age, gender, height, weight and activity level...". Mention profile metrics only when they directly contribute.
+                - Do not invent arbitrary numerical targets (no invented weight ranges, no uncalculated calorie/protein targets). Only quote official numbers supplied below.
+
+                MEDICAL SAFETY:
+                - Never diagnose diseases, disorders, or medical conditions.
+                - Never prescribe medical treatment.
+                - Use cautious lifestyle language ("may be relevant", "could support", "based on the information you provided").
+
+                LANGUAGE & TONE:
+                - Use clean, simple, and formal English. Avoid overly dense or difficult academic vocabulary.
+                - Write short, clear sentences that are easy and quick to read.
+                - Respond in the EXACT same language as the user's latest question.
+
+                ZERO FLUFF & FILLER:
+                - Cut out all unnecessary filler words and get straight to the point in the very first sentence.
+                - Never repeat boilerplate intro phrases such as "You have not selected a goal yet" or "Please choose a goal through the normal Choose Goal flow".
+
+                STRICT OUTPUT CONSTRAINTS:
+                - Cap your entire response to 50–80 words maximum.
+                - Provide 1 direct opening sentence, followed by 2 to 3 concise bullet points (-) for recommendations instead of dense text blocks.
                 - TUI CLEANLINESS: Do not use Markdown asterisks (**bold**). Use clean plaintext with hyphen bullets (-).
-                - STRUCTURE: Provide 1 brief sentence explaining the core cause or mechanism, followed by 2–3 short, actionable bullet points.
-                - LANGUAGE MATCHING (CRITICAL):
-                  * Always respond in the EXACT same language as the user's latest question.
-                  * If the user writes in English, reply STRICTLY in English.
-                  * NEVER switch to or output Khmer unless the user explicitly writes in Khmer script or explicitly asks "translate to Khmer".
-                - Answer directly, clearly, and concisely without filler greetings or fluff.
-
-                USER PROFILE:
                 """);
 
         if (user != null) {
+            sb.append("\nUSER PROFILE (CONTEXT ONLY):\n");
             sb.append("Age: ").append(user.getAge() != null ? user.getAge() : "Not specified").append('\n')
                     .append("Gender: ").append(user.getGender() != null ? user.getGender() : "Not specified").append('\n')
                     .append("Height: ").append(user.getHeightCm() != null && user.getHeightCm() > 0 ? String.format(Locale.ROOT, "%.0f cm", user.getHeightCm()) : "Not specified").append('\n')
                     .append("Weight: ").append(user.getWeightKg() != null && user.getWeightKg() > 0 ? String.format(Locale.ROOT, "%.1f kg", user.getWeightKg()) : "Not specified").append('\n')
-                    .append("Activity Level: ").append(user.getActivityLevel() != null ? user.getActivityLevel() : "Not specified").append("\n\n");
+                    .append("Activity Level: ").append(user.getActivityLevel() != null ? user.getActivityLevel() : "Not specified").append('\n');
+            if (user.getHeightCm() != null && user.getHeightCm() > 0 && user.getWeightKg() != null && user.getWeightKg() > 0) {
+                double bmi = user.getWeightKg() / ((user.getHeightCm() / 100.0) * (user.getHeightCm() / 100.0));
+                sb.append(String.format(Locale.ROOT, "Calculated BMI: %.1f\n", bmi));
+            }
+            sb.append('\n');
         }
 
-        sb.append("ACTIVE GOAL (INTERNAL CONTEXT ONLY - DO NOT DISPLAY OR ECHO AS A LABEL):\n");
         if (goal != null) {
-            sb.append(goal.getName()).append(" - ")
-                    .append(goal.getDescription() != null ? goal.getDescription() : "").append("\n\n");
+            sb.append("CURRENT SELECTED GOAL (INTERNAL CONTEXT ONLY - DO NOT DISPLAY UNLESS ASKED):\n");
+            sb.append(goal.getName()).append(" - ").append(goal.getDescription() != null ? goal.getDescription() : "").append("\n\n");
         } else {
-            sb.append("None selected.\n\n");
-            sb.append("""
-                    GOAL SELECTION GUIDANCE:
-                    The user has NOT selected a goal yet.
-                    If the user asks what goal may suit them or what to focus on:
-                    - Analyze their available profile information (Age, Gender, Height, Weight, Activity Level).
-                    - Provide thoughtful guidance and suggest 2-3 appropriate LIFEForge goals to explore (e.g. Build Muscle, Lose Weight, Improve Fitness, Skin Health, Improve Sleep, General Wellness).
-                    - You MUST NOT automatically select, set, or change the user's goal.
-                    - Do not require or demand that the user choose a goal.
-                    """).append("\n");
+            sb.append("CURRENT SELECTED GOAL: None selected yet.\n\n");
         }
 
-        sb.append("RULE ENGINE DETERMINED TARGETS:\n");
-        if (calorieRelevant && calorieSummary != null) {
-            sb.append(String.format(Locale.ROOT, "BMR: %.0f kcal/day | TDEE: %.0f kcal/day | Calorie Target: ~%.0f kcal/day\n",
-                    calorieSummary.bmr, calorieSummary.tdee, calorieSummary.suggestedTarget));
-        } else if (calorieSummary != null && calorieSummary.bmr > 0) {
-            sb.append(String.format(Locale.ROOT, "BMR: %.0f kcal/day | TDEE (Maintenance): %.0f kcal/day\n",
-                    calorieSummary.bmr, calorieSummary.tdee));
+        sb.append("OFFICIAL CALCULATED TARGETS (QUOTE ONLY IF RELEVANT TO USER QUESTION):\n");
+        if (calorieSummary != null && calorieSummary.bmr > 0) {
+            sb.append(String.format(Locale.ROOT, "BMR: %.0f kcal/day | TDEE: %.0f kcal/day", calorieSummary.bmr, calorieSummary.tdee));
+            if (calorieRelevant && calorieSummary.suggestedTarget > 0) {
+                sb.append(String.format(Locale.ROOT, " | Calorie Target: ~%.0f kcal/day", calorieSummary.suggestedTarget));
+            }
+            sb.append('\n');
         }
         sb.append(String.format(Locale.ROOT, "Daily Hydration Target: %.1f L/day\n\n", hydrationLiters));
 
         if (plan != null && plan.getAreas() != null && !plan.getAreas().isEmpty()) {
-            sb.append("OFFICIAL PRIORITIZED PLAN AREAS:\n");
+            sb.append("OFFICIAL PLAN AREAS (INTERNAL CONTEXT ONLY):\n");
             for (PersonalizedPlanResult.AreaItem area : plan.getAreas()) {
-                sb.append("• [").append(area.priority().getLabel()).append("] ")
-                        .append(area.emoji()).append(" ").append(area.category().getName());
+                sb.append("• ").append(area.emoji()).append(" ").append(area.category().getName());
                 if (area.recommendation() != null) {
-                    sb.append(" — Official Rec: \"").append(area.recommendation().getTitle()).append("\"");
-                    if (area.recommendation().getRecommendedActions() != null) {
-                        sb.append("\n  Actions: ").append(area.recommendation().getRecommendedActions().replaceAll("\\r?\\n+", " "));
-                    }
-                    if (area.recommendation().getSuggestedTarget() != null) {
-                        sb.append("\n  Target: ").append(area.recommendation().getSuggestedTarget());
-                    }
+                    sb.append(" — Rec: \"").append(area.recommendation().getTitle()).append("\"");
                 }
-                sb.append("\n");
+                sb.append('\n');
             }
-            sb.append("\n");
+            sb.append('\n');
         }
 
         if (recentConversation != null && !recentConversation.isEmpty()) {
@@ -792,11 +1137,11 @@ public class AiExplanationService implements RecommendationExplanationService {
             for (int i = start; i < recentConversation.size(); i++) {
                 sb.append(recentConversation.get(i)).append('\n');
             }
-            sb.append("\n");
+            sb.append('\n');
         }
 
-        sb.append("USER QUESTION:\n").append(question.trim())
-                .append("\n\nTASK:\nAnswer the user's question directly, accurately, and concisely, grounded in the official plan above.");
+        sb.append("USER LATEST QUESTION:\n").append(question.trim())
+                .append("\n\nTASK:\nDetermine the user's specific intent from their latest question and answer THAT question directly, accurately, and naturally.");
 
         return sb.toString();
     }
@@ -1081,24 +1426,30 @@ public class AiExplanationService implements RecommendationExplanationService {
             json.append("}");
         }
         json.append("],");
-        json.append("\"stream\":false");
+        json.append("\"stream\":false,");
+        json.append("\"options\":{");
+        json.append("\"num_predict\":120,");
+        json.append("\"temperature\":0.3,");
+        json.append("\"top_p\":0.9");
+        json.append("}");
         json.append("}");
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/api/chat"))
-                .timeout(Duration.ofSeconds(60))
+                .timeout(Duration.ofSeconds(15))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(json.toString()))
                 .build();
 
         if (VERBOSE) {
-            System.out.println("[LifeForge AI] Calling Ollama /api/chat...");
+            System.out.println("[LifeForge AI] Calling Ollama /api/chat asynchronously...");
         }
 
-        HttpResponse<String> response = httpClient.send(
+        CompletableFuture<HttpResponse<String>> future = httpClient.sendAsync(
                 request,
                 HttpResponse.BodyHandlers.ofString()
         );
+        HttpResponse<String> response = future.get(15, java.util.concurrent.TimeUnit.SECONDS);
 
         if (VERBOSE) {
             System.out.println("[LifeForge AI] HTTP Status: " + response.statusCode());

@@ -19,6 +19,7 @@ import java.io.InputStream;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -35,7 +36,7 @@ import java.util.Map;
 public class JasperReportsService {
 
     private static final String REPORTS_RESOURCE_BASE = "/reports/";
-    public static final String HEALTH_REPORT = "LifeForgeHealthReport";
+    public static final String HEALTH_REPORT = "lifeForge_report";
     public static final String SAVED_RECOMMENDATIONS_REPORT = "SavedRecommendationsReport";
 
     private final ExportService exportService;
@@ -62,6 +63,24 @@ public class JasperReportsService {
         exportToHtml(HEALTH_REPORT, exportService.buildReportData(user, goal, recommendations), outputFile);
     }
 
+    public void exportSavedRecommendationsToPdf(User user, int savedCount, Path outputFile)
+            throws SQLException, JRException {
+        Map<String, Object> params = new HashMap<>();
+        params.put("fullName", user != null ? user.getFullName() : "User");
+        params.put("email", user != null ? user.getEmail() : "N/A");
+        params.put("savedCount", savedCount);
+        exportToPdf(SAVED_RECOMMENDATIONS_REPORT, params, outputFile);
+    }
+
+    public void exportSavedRecommendationsToHtml(User user, int savedCount, Path outputFile)
+            throws SQLException, JRException {
+        Map<String, Object> params = new HashMap<>();
+        params.put("fullName", user != null ? user.getFullName() : "User");
+        params.put("email", user != null ? user.getEmail() : "N/A");
+        params.put("savedCount", savedCount);
+        exportToHtml(SAVED_RECOMMENDATIONS_REPORT, params, outputFile);
+    }
+
     /**
      * Exports a report template to PDF. The report is filled using the
      * supplied parameter map plus a live connection from DatabaseConfig.
@@ -83,16 +102,38 @@ public class JasperReportsService {
     private void export(String reportName, Map<String, Object> parameters, Path outputFile, boolean asPdf)
             throws SQLException, JRException {
         JasperReport compiledReport = compile(reportName);
-        try (Connection connection = DatabaseConfig.getConnection()) {
-            JasperPrint jasperPrint = JasperFillManager.fillReport(compiledReport, parameters, connection);
+        Connection connection = null;
+        try {
+            connection = DatabaseConfig.getConnection();
+        } catch (SQLException ignored) {
+            // Graceful degradation when offline or during tests without DB
+        }
+        try {
+            JasperPrint jasperPrint;
+            if (compiledReport.getQuery() != null && connection != null && !connection.isClosed()) {
+                jasperPrint = JasperFillManager.fillReport(compiledReport, parameters, connection);
+            } else {
+                jasperPrint = JasperFillManager.fillReport(compiledReport, parameters, new net.sf.jasperreports.engine.JREmptyDataSource(1));
+            }
             export(jasperPrint, outputFile, asPdf);
+        } finally {
+            if (connection != null) {
+                try {
+                    connection.close();
+                } catch (SQLException ignored) {
+                }
+            }
         }
     }
 
     private JasperReport compile(String reportName) throws JRException {
-        InputStream template = getClass().getResourceAsStream(REPORTS_RESOURCE_BASE + reportName + ".jrxml");
+        String targetTemplate = reportName;
+        if ("LifeForgeHealthReport".equalsIgnoreCase(reportName)) {
+            targetTemplate = HEALTH_REPORT;
+        }
+        InputStream template = getClass().getResourceAsStream(REPORTS_RESOURCE_BASE + targetTemplate + ".jrxml");
         if (template == null) {
-            throw new JRException("Report template not found on classpath: " + REPORTS_RESOURCE_BASE + reportName + ".jrxml");
+            throw new JRException("Report template not found on classpath: " + REPORTS_RESOURCE_BASE + targetTemplate + ".jrxml");
         }
         return JasperCompileManager.compileReport(template);
     }

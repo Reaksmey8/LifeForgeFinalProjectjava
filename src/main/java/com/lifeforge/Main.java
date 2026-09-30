@@ -1,9 +1,9 @@
 package com.lifeforge;
 
 import com.lifeforge.config.DatabaseConfig;
-import com.lifeforge.tui4j.LifeForge;
-import com.lifeforge.tui4j.LifeForgeRunner;
-import com.lifeforge.tui4j.TerminalSupport;
+import com.lifeforge.view.LifeForge;
+import com.lifeforge.view.LifeForgeRunner;
+import com.lifeforge.view.TerminalSupport;
 
 /**
  * LifeForge application entry point.

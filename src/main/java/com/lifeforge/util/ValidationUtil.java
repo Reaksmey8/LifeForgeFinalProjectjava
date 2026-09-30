@@ -14,7 +14,27 @@ public final class ValidationUtil {
     private static final Pattern EMAIL_PATTERN =
             Pattern.compile("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
 
+    private static final Pattern USERNAME_PATTERN =
+            Pattern.compile("^[A-Za-z0-9._-]+$");
+
     private ValidationUtil() {
+    }
+
+    public static String validateUsername(String username) {
+        if (username == null || username.trim().isEmpty()) {
+            return "Username is required.";
+        }
+        String trimmed = username.trim();
+        if (trimmed.length() < 3) {
+            return "Username must be at least 3 characters.";
+        }
+        if (trimmed.length() > 50) {
+            return "Username must be under 50 characters.";
+        }
+        if (!USERNAME_PATTERN.matcher(trimmed).matches()) {
+            return "Username can only contain letters, numbers, '.', '-', and '_'.";
+        }
+        return null;
     }
 
     public static String validateFullName(String fullName) {

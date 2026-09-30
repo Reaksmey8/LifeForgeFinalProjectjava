@@ -78,7 +78,7 @@ public class UserDao {
     }
 
     public Optional<User> findByUsername(String username) throws SQLException {
-        String sql = "SELECT * FROM users WHERE username = ?";
+        String sql = "SELECT * FROM users WHERE LOWER(username) = LOWER(?)";
         try (Connection conn = DatabaseConfig.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, username);
@@ -93,7 +93,7 @@ public class UserDao {
 
     /** Resolves an account by email OR username for login. */
     public Optional<User> findByEmailOrUsername(String login) throws SQLException {
-        String sql = "SELECT * FROM users WHERE email = ? OR username = ?";
+        String sql = "SELECT * FROM users WHERE LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?)";
         try (Connection conn = DatabaseConfig.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, login);
@@ -123,7 +123,7 @@ public class UserDao {
     }
 
     public boolean usernameExists(String username) throws SQLException {
-        String sql = "SELECT 1 FROM users WHERE username = ?";
+        String sql = "SELECT 1 FROM users WHERE LOWER(username) = LOWER(?)";
         try (Connection conn = DatabaseConfig.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, username);
@@ -134,7 +134,7 @@ public class UserDao {
     }
 
     public boolean emailExists(String email) throws SQLException {
-        String sql = "SELECT 1 FROM users WHERE email = ?";
+        String sql = "SELECT 1 FROM users WHERE LOWER(email) = LOWER(?)";
         try (Connection conn = DatabaseConfig.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, email);

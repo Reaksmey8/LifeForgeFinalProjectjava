@@ -25,6 +25,7 @@ import com.lifeforge.service.AuthService;
 import com.lifeforge.service.CalorieService;
 import com.lifeforge.service.CodeDeliveryService;
 import com.lifeforge.service.ConsoleCodeDeliveryService;
+import com.lifeforge.service.CustomGoalService;
 import com.lifeforge.service.ExportService;
 import com.lifeforge.service.GoalService;
 import com.lifeforge.service.HydrationService;
@@ -54,6 +55,7 @@ public class AppContext {
     public final AdminController adminController;
     public final ReportController reportController;
     public final com.lifeforge.service.BookmarkService bookmarkService;
+    public final CustomGoalService customGoalService;
 
     private AppContext(Session session,
                        AuthController authController,
@@ -64,7 +66,8 @@ public class AppContext {
                        SavedRecommendationController savedRecommendationController,
                        AdminController adminController,
                        ReportController reportController,
-                       com.lifeforge.service.BookmarkService bookmarkService) {
+                       com.lifeforge.service.BookmarkService bookmarkService,
+                       CustomGoalService customGoalService) {
         this.session = session;
         this.authController = authController;
         this.userController = userController;
@@ -75,6 +78,7 @@ public class AppContext {
         this.adminController = adminController;
         this.reportController = reportController;
         this.bookmarkService = bookmarkService;
+        this.customGoalService = customGoalService;
     }   
 
     /**
@@ -123,8 +127,9 @@ public class AppContext {
         AnalyticsService analyticsService = new AnalyticsService(
                 userDao, userGoalDao, goalDao, recommendationDao, savedRecommendationDao);
 
-        ExportService exportService = new ExportService(calorieService, hydrationService);
+        ExportService exportService = new ExportService(calorieService, hydrationService, aiExplanationService);
         JasperReportsService jasperReportsService = new JasperReportsService(exportService);
+        CustomGoalService customGoalService = new CustomGoalService();
 
         // ---- Controllers ----
         AuthController authController = new AuthController(authService, session);
@@ -151,6 +156,7 @@ public class AppContext {
                 savedRecommendationController,
                 adminController,
                 reportController,
-                bookmarkService);
+                bookmarkService,
+                customGoalService);
     }
 }
